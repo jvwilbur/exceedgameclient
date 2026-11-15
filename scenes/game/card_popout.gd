@@ -106,7 +106,7 @@ func show_cards(cards : Array, total_slot_count : int = -1):
 		spot.add_child(new_card)
 		new_card.initialize_simple(card.card_id, card.card_url_loaded_image, card.card_url_loaded_cardback, card.card_attack_name, card.card_boost_name)
 		if card.badge_text != "":
-			new_card.set_badge(card.badge_text, card.badge_color)
+			new_card.set_badge(card.badge_text, card.badge_color, card.badge_s6, card.badge_s3)
 		new_card.flip_card_to_front(card.card_front.visible)
 
 		var label = card.get_label()

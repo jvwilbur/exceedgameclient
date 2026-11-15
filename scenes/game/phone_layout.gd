@@ -1122,6 +1122,11 @@ func _apply_island() -> void:
 		island_b3.visible = false
 	var th := island_tab.size.y
 	var extra_h : float = (h + 4.0) if two_rows else 0.0
+	if _range_rows > 0:
+		# (naming a range: the grid of buttons takes the island's place)
+		for nb in [island_red, island_green, island_b3]:
+			nb.visible = false
+		extra_h = (h + 4.0) * (_range_rows - 1)
 	# The second row, above the island: as many columns as the island's row (an unused slot is an
 	# inert grey "-").
 	var top : Array = [island_x3, island_x4, island_x5]
@@ -1175,6 +1180,11 @@ func _choice_count() -> int:
 	if not g.action_menu_container.visible or not g.action_menu.visible:
 		return 0
 	var di = g.game_wrapper.get_decision_info()
+	if _is_reading_choice(di):
+		# The opponent's Reading named a card in your hand: Strike with it / EX Strike with it
+		# (/ with an Overload) as island buttons too.
+		n = g.current_action_menu_choices.size()
+		return n if n >= 2 and n <= MAX_ISLAND_CHOICES else 0
 	if di == null or di.type != Enums.DecisionType.DecisionType_EffectChoice:
 		return 0
 	if not _gauge_pass_info().is_empty():
@@ -1185,6 +1195,17 @@ func _choice_count() -> int:
 	if not _move_choice_map().is_empty() or not _reveal_pick_info().is_empty():
 		return 0
 	return n
+
+# Your forced strike after the opponent's Reading named a card in your hand.
+func _is_reading_choice(di) -> bool:
+	if di == null or di.type != Enums.DecisionType.DecisionType_ChooseSimultaneousEffect or not (di.choice is Array):
+		return false
+	if di.choice.is_empty():
+		return false
+	for e in di.choice:
+		if not (e is Dictionary) or str(e.get("effect_type", "")) != "strike_response_reading":
+			return false
+	return true
 
 # An effect choice that is just "add a card to Gauge" or Pass: the island asks "Add X to
 # Gauge?" with its green O (add) and red X (pass). Returns {ok, cancel, title} or {}.
@@ -1311,7 +1332,90 @@ func _set_choice_button(b : Button, txt : String, bw : float, bh : float, col : 
 	b.text = wrapped
 	b.disabled = disabled
 
+# ---- Naming a number (Intimidate: "name a Range") -------------------------------------------------
+# The island turns into rows of four buttons, one per option ("Range 0" ... "Range 9", then the
+# game's extra options such as "Range X"), up to 12 (three rows); the bottom row sits on the island,
+# the others above it.
+const RANGE_GRID_COLS := 4
+const RANGE_GRID_MAX := 12
+var _range_btns : Array = []
+var _range_key : String = ""
+var _range_rows : int = 0
+
+# The options as [{text, idx}] ([] when not naming a number, or too many to show).
+func _range_picks() -> Array:
+	var g = game
+	if g.observer_mode or g.ui_state != g.UIState.UIState_MakeChoice \
+			or g.ui_sub_state != g.UISubState.UISubState_PickNumberFromRange:
+		return []
+	var di = g.game_wrapper.get_decision_info()
+	if di == null or di.type != Enums.DecisionType.DecisionType_PickNumberFromRange or not (di.choice is Array):
+		return []
+	var n : int = di.choice.size()
+	if n < 2 or n > RANGE_GRID_MAX:
+		return []
+	var what := str(di.effect_type).to_lower()
+	var prefix := "Range " if what.contains("range") else ("Speed " if what.contains("speed") else "")
+	var extras : Array = di.valid_zones if di.valid_zones is Array else []
+	var lo := int(di.amount_min)
+	var out : Array = []
+	for i in range(n):
+		var num := lo + i
+		var txt := "%s%d" % [prefix, num]
+		if num > int(di.amount):
+			var k := num - int(di.amount) - 1
+			txt = str(extras[k]) if k < extras.size() else str(num)
+		out.append({"text": txt, "idx": i})
+	return out
+
+func _update_range_grid() -> bool:
+	var picks := _range_picks()
+	if picks.is_empty():
+		if _range_rows > 0:
+			_range_rows = 0
+			_range_key = ""
+			for b in _range_btns:
+				b.visible = false
+			_layout_island()
+		return false
+	var key := str(picks.size()) + "|" + str(island_rect.size)
+	_choice_mode = false
+	_choice_n = 0
+	if key == _range_key:
+		return true
+	_range_key = key
+	while _range_btns.size() < picks.size():
+		var nb := _island_button("", _CHOICE_COLORS[0])
+		var ref_b : Button = nb
+		nb.pressed.connect(func():
+			var ci := int(ref_b.get_meta("choice_idx", -1))
+			if ci >= 0 and not _range_picks().is_empty():
+				game._on_choice_pressed(ci))
+		island_root.add_child(nb)
+		island_root.move_child(nb, island_root.get_child_count() - 3) # (under the tab and the sparkle)
+		_range_btns.append(nb)
+	var w := island_rect.size.x
+	var h := island_rect.size.y
+	var bw := w / float(RANGE_GRID_COLS) - 3.0
+	_range_rows = int(ceil(picks.size() / float(RANGE_GRID_COLS)))
+	for i in range(_range_btns.size()):
+		var b : Button = _range_btns[i]
+		if i >= picks.size():
+			b.visible = false
+			continue
+		var row : int = floori(i / float(RANGE_GRID_COLS)) # (0: the island's own row, then upward)
+		var col := i % RANGE_GRID_COLS
+		b.visible = true
+		b.position = Vector2(w * col / float(RANGE_GRID_COLS), -row * (h + 4.0))
+		b.size = Vector2(maxf(w / float(RANGE_GRID_COLS) - (3.0 if col < RANGE_GRID_COLS - 1 else 0.0), 0.0), h)
+		b.set_meta("choice_idx", int(picks[i]["idx"]))
+		_set_choice_button(b, str(picks[i]["text"]), bw, h, _CHOICE_COLORS[row % _CHOICE_COLORS.size()], false)
+	_apply_island()
+	return true
+
 func _update_choice_buttons() -> void:
+	if _update_range_grid():
+		return
 	var n := _choice_count()
 	var was := _choice_mode
 	_choice_mode = n > 0
@@ -1472,6 +1576,9 @@ func _island_info() -> Dictionary:
 	var g = game
 	if not g.action_menu_container.visible or not g.action_menu.visible:
 		return {}
+	if not _range_picks().is_empty():
+		# Naming a range (Intimidate): the island becomes a grid of buttons (_update_range_grid).
+		return {"ok": -1, "cancel": -1, "ok_disabled": true, "range_grid": true}
 	var gp := _gauge_pass_info()
 	if not gp.is_empty():
 		return {"ok": gp["ok"], "cancel": gp["cancel"], "ok_disabled": false}
@@ -1860,10 +1967,17 @@ func _character_action_available() -> bool:
 # Pull 1): its text stays in that player's bonus effect box (yours or the opponent's) at all
 # times as a reminder, with any other strike
 # bonuses listed under it. Add a character's deck id to do the same for another.
-const PERMANENT_BONUS_CHARACTERS := ["testament", "nago", "happychaos", "millia", "zato", "chipp", "axl", "leo", "anji"]
+const PERMANENT_BONUS_CHARACTERS := ["testament", "nago", "happychaos", "millia", "zato", "chipp", "axl", "leo", "anji",
+		"zangief", "akuma", "cammy", "dan"]
 # Characters whose ability only works on their own turn (Giovanna: only a strike she starts): the
 # box shows it during that character's turns only, for either player.
-const TURN_BONUS_CHARACTERS := ["giovanna", "potemkin", "may", "ramlethal"]
+const TURN_BONUS_CHARACTERS := ["giovanna", "potemkin", "may", "ramlethal", "sagat", "chunli", "guile", "cviper", "vega"]
+# Of those, characters whose bonus only applies from an arena edge (Vega): shown on their turn
+# while they stand in an edge space.
+const EDGE_BONUS_CHARACTERS := ["vega"]
+# Characters whose ability box keeps its "When you Exceed" lines (for everyone else they move to
+# the bonus box as a reminder on your turn: see _update_exceed_note).
+const ABILITY_KEEPS_EXCEED_LINES := ["sagat", "ken", "bison", "zangief", "cviper"]
 # The ability box's text when it differs from the bonus box's, [front side, exceeded side].
 # (Characters without an entry show their PERMANENT_BONUS_TEXT there too. A null side keeps the
 # text the game generates.)
@@ -1905,6 +2019,55 @@ const PRINTED_ABILITY_TEXT := {
 	"nago": [
 		"When you Reshuffle, Exceed at end of turn.",
 		"Your Specials are invalid.",
+	],
+	# ---- Season 3 ----
+	"sagat": [
+		"When you Exceed, draw 2 cards and retreat up to 2",
+		"You may set face-up for +1 Speed, +1 Power",
+	],
+	"ryu": [
+		"[b]ACTION:[/b] You may move 1",
+		"[b]ACTION:[/b] You may move 1 and draw 1",
+	],
+	"ken": [
+		"When you Exceed, draw 1 and Close up to 2\n\n[b]ACTION:[/b] You may Close 1 and draw 1",
+		"[b]ACTION:[/b] You may Close 1, draw 1, and Strike",
+	],
+	"bison": [
+		"When you Exceed, you may add up to 3 cards from hand to Gauge, then draw that many\n\n[b]ACTION:[/b] You may add 1 card from hand to Gauge, draw 1",
+		"[b]ACTION:[/b] You may add up to 3 cards from hand to Gauge, then draw that many",
+	],
+	"zangief": [
+		"When you Exceed, Pull up to 2",
+		"Your attacks have \"[b]SET, Range 1, Critical:[/b] +3 Power, +1 Speed\"",
+	],
+	"dan": [
+		"Wild Swings have \"[b]Critical:[/b] +1 Power, +1 Speed\"",
+		"When drawing a card at end of turn, draw from the top or bottom of your deck. You may then discard a card.",
+	],
+	"akuma": [
+		"[b]Critical:[/b] Both players +2 Power",
+		"[b]Critical:[/b] Both players +3 Power",
+	],
+	"chunli": [
+		"All Boosts have \"[b]NOW:[/b] Retreat 1\"",
+		"All Boosts have \"[b]NOW:[/b] Retreat 1\"\nContinuous Boosts have \"+0-1 Range\"",
+	],
+	"guile": [
+		"When you Change Cards spending Gauge, generate +2 Force",
+		"When you Change Cards spending Gauge, generate +2 Force, then you may Strike",
+	],
+	"cammy": [
+		"If you move past the opponent, your Range includes them",
+		"If you move past the opponent, your Range includes them\n[b]Hit:[/b] If you moved past the opponent, +1 Power and gain Advantage",
+	],
+	"cviper": [
+		"When you Exceed, draw 5 cards",
+		"Your Continuous Boosts have \"[b]NOW:[/b] Strike\" and your attack is Critical",
+	],
+	"vega": [
+		"Your Special and Ultra attacks have \"[b]SET, Edge:[/b] +2 Power\"",
+		"Your Special and Ultra attacks have \"[b]SET, Edge:[/b] +3 Power, +1 Speed\"",
 	],
 }
 # The wording printed on the character card, [front side, exceeded side]. Characters without an
@@ -1958,6 +2121,43 @@ const PERMANENT_BONUS_TEXT := {
 		"Your Normals have \"Hit: You may Push or Pull 1.\"",
 		"Your Normals have \"Hit: Draw 1. You may Push or Pull 1.\"",
 	],
+	# ---- Season 3 ---- (a "\n" puts the rest on a line of its own in the box)
+	"sagat": [
+		"You may set face-up for +1 Speed",
+		"You may set face-up for +1 Speed, +1 Power",
+	],
+	"zangief": [
+		"Your attacks have \"SET, Range 1, Critical: +1 Power, +1 Speed\"",
+		"Your attacks have \"SET, Range 1, Critical: +3 Power, +1 Speed\"",
+	],
+	"dan": [
+		"Wild Swings have \"Critical: +1 Power, +1 Speed\"",
+		"Wild Swings have \"Critical: +1 Power, +1 Speed\"",
+	],
+	"akuma": [
+		"Critical: Both players +2 Power",
+		"Critical: Both players +3 Power",
+	],
+	"chunli": [
+		"All Boosts have \"NOW: Retreat 1\"",
+		"All Boosts have \"NOW: Retreat 1\"\nContinuous Boosts have \"+0-1 Range\"",
+	],
+	"guile": [
+		"When you Change Cards spending Gauge, generate +2 Force",
+		"When you Change Cards spending Gauge, generate +2 Force, then you may Strike",
+	],
+	"cammy": [
+		"If you move past the opponent, your Range includes them",
+		"If you move past the opponent, your Range includes them\nHit: If you moved past the opponent, +1 Power and gain Advantage",
+	],
+	"cviper": [
+		"Your Continuous Boosts have \"NOW: Strike\"",
+		"Your Continuous Boosts have \"NOW: Strike\" and your attack is Critical",
+	],
+	"vega": [
+		"Your Specials and Ultras have +2 Power",
+		"Your Specials and Ultras have +3 Power, +1 Speed",
+	],
 }
 # The game's own strike-bonus lines that a character's always-shown line already covers.
 const BONUS_LINES_COVERED := {
@@ -1981,14 +2181,31 @@ func _covered_by_permanent(side : int, t : String) -> bool:
 	if t in BONUS_LINES_COVERED.get(did, []):
 		return true
 	var printed = PERMANENT_BONUS_TEXT.get(did)
-	if printed != null and t in printed:
-		return true
+	if printed != null:
+		for p in printed:
+			if t in str(p).split("\n"):
+				return true
 	var nt := _norm_bonus(t)
 	return nt.length() >= 6 and _norm_bonus(_perm_lines[side]).contains(nt)
+
+# The always-shown line of a side's box, split into its lines (a "\n" in it starts a new line).
+func _perm_pieces(side : int) -> PackedStringArray:
+	if _perm_lines[side] == "":
+		return PackedStringArray()
+	return str(_perm_lines[side]).split("\n", false)
+
+func _is_perm_piece(text : String, line : String) -> bool:
+	return line != "" and text in line.split("\n", false)
 
 func hides_character_effect_lines(player) -> bool:
 	var side := 0 if int(player) == int(Enums.PlayerId.PlayerId_Player) else 1
 	return _perm_lines[side] != ""
+
+# A side's character stands in an arena edge space (1 or 9).
+func _at_arena_edge(side : int) -> bool:
+	var pid := Enums.PlayerId.PlayerId_Player if side == 0 else Enums.PlayerId.PlayerId_Opponent
+	var loc := int(game.game_wrapper.get_player_location(pid))
+	return loc == 1 or loc == 9
 
 func _side_deck_id(side : int) -> String:
 	return str((game.player_deck if side == 0 else game.opponent_deck).get("id", ""))
@@ -2006,6 +2223,8 @@ func _permanent_bonus_line(side : int = 0) -> String:
 	var did := str(deck.get("id", ""))
 	if did in TURN_BONUS_CHARACTERS:
 		if not _side_turn(side):
+			return ""
+		if did in EDGE_BONUS_CHARACTERS and not _at_arena_edge(side):
 			return ""
 	elif not did in PERMANENT_BONUS_CHARACTERS:
 		return "" # (for either player: the opponent's box is a reminder of what they can do)
@@ -2069,7 +2288,7 @@ func _update_permanent_bonus_side(side : int) -> void:
 					var t := ln.strip_edges()
 					if t.begins_with("*"):
 						t = t.substr(1).strip_edges()
-					if t != "" and t != old:
+					if t != "" and not _is_perm_piece(t, old):
 						keep.append(t)
 				panel.visible = false
 				for t in keep:
@@ -2088,7 +2307,7 @@ func _update_permanent_bonus_side(side : int) -> void:
 				var t := ln.strip_edges()
 				if t.begins_with("*"):
 					t = t.substr(1).strip_edges()
-				if t != "" and t != old_line and t != line:
+				if t != "" and not _is_perm_piece(t, old_line) and not _is_perm_piece(t, line):
 					keep_lines.append(t)
 		panel.visible = false
 	if not panel.visible:
@@ -2112,6 +2331,8 @@ func _bonus_effect_text_for(side : int, include_permanent : bool = false) -> Str
 	var raw : String = label.get_parsed_text()
 	raw = raw.replace(" \n    ", " ").replace("\n    ", " ")
 	var parts : Array[String] = []
+	var perm_parts : Array[String] = []
+	var pieces := _perm_pieces(side)
 	for line in raw.split("\n", false):
 		var t := line.strip_edges()
 		if t.begins_with("*"):
@@ -2119,14 +2340,23 @@ func _bonus_effect_text_for(side : int, include_permanent : bool = false) -> Str
 		# The always-shown ability line isn't a bonus for this strike.
 		# (A strike bonus the always-shown line already describes isn't listed twice, nor is a
 		# leftover always-shown line from the character's other side.)
-		if _perm_lines[side] != "" and t != _perm_lines[side] and _covered_by_permanent(side, t):
+		if _perm_lines[side] != "" and not t in pieces and _covered_by_permanent(side, t):
 			continue
 		# (nor is your "When you Exceed" reminder, though it is shown in the box itself)
 		if side == 0 and not include_permanent and _exceed_note_shown != "" and t == _exceed_note_shown:
 			continue
-		if t != "" and (include_permanent or t != _perm_lines[side]):
+		if t == "":
+			continue
+		if t in pieces:
+			if include_permanent:
+				perm_parts.append(t)
+		else:
 			parts.append(t)
-	return "; ".join(parts)
+	# (an always-shown line of several lines keeps them on lines of their own)
+	var out := "\n".join(perm_parts)
+	if not parts.is_empty():
+		out = (out + "; " if out != "" else "") + "; ".join(parts)
+	return out
 
 # Characters whose set-strike effect depends on having used their character action (the
 # strike comes from it): the effect is listed in the bonus effect box from the moment the
@@ -2296,7 +2526,13 @@ func _island_press(confirm : bool) -> void:
 	if info.get("ws_pending", false):
 		_ws_pending = false
 		if not confirm:
-			game._update_buttons() # (X: the wild swing is let go; still choosing)
+			# X backs right out of the strike (to the turn menu), as tapping the blue area again
+			# does. (A strike that can't be cancelled, e.g. a response: the wild swing is just let
+			# go, and you're still choosing a card.)
+			if int(info.get("cancel", -1)) >= 0:
+				game.action_menu._on_choice_pressed(int(info["cancel"]))
+			else:
+				game._update_buttons()
 			return
 	if _topdeck_picking():
 		if _choice_count() > 0:
@@ -2335,7 +2571,7 @@ func _update_menu_minimize() -> void:
 		if am.number_panel.visible:
 			minimize = false
 		if _choice_count() > 0 or not _move_choice_map().is_empty() or not _reveal_pick_info().is_empty() \
-				or _topdeck_picking() or not _gauge_pass_info().is_empty():
+				or _topdeck_picking() or not _gauge_pass_info().is_empty() or not _range_picks().is_empty():
 			minimize = true # effect options live in the island / on the arena instead
 	if minimize == am.showing:
 		am._on_show_hide_button_pressed()
@@ -2543,13 +2779,157 @@ func _update_boost_layout() -> void:
 			# Same size and place as the boost window's collapsed box, right on top of it
 			# (the asterisk / overdrive buttons overlap it).
 			bp.position = Vector2(xs[i], top - bp.size.y - 2.0)
+		var above : float = top
+		if bp != null and bp.visible:
+			above = bp.position.y
+		# Season 3: the strike's Critical effects in their own fiery box, on top of the bonus box.
+		above = _place_crit_box(i, xs[i], above, zone_w, bp)
 		if USE_STAT_GEMS:
-			var above : float = top
-			if bp != null and bp.visible:
-				above = bp.position.y
 			var gems_top := _place_stat_gems(i, xs[i], above - 3.0, zone_w)
 			if gems_top < above - 3.0:
 				od.position.y = gems_top - 40.0 # (the overdrive button rides above the gems)
+
+# ---- Season 3: the Critical box ------------------------------------------------------------------
+# While a strike is Critical, its attack's Critical effects are listed in a fiery box of their own
+# (on top of the bonus box): one effect per line, without their "Critical," lead-in. Effects shown
+# by badges (Ignore Armor...) or stat gems (+2 Speed...) are left out, and if nothing is left the
+# box doesn't show.
+var _crit_card : Array = [-1, -1]      # per side: the Critical strike card's id
+var _crit_boxes : Array = [null, null]
+var _crit_cache : Array = ["", ""]     # per side: what the lines were worked out for
+var _crit_lines_cache : Array = [[], []]
+const CRIT_FONT := 19
+# Attacks whose Critical effects read better in the card's own words than the generated text,
+# by card id: their lines for the Critical box.
+const CRITICAL_TEXT := {
+	"chunli_lightninglegs": ["[b]AFTER:[/b] If you hit, recur {card} to deck and sustain a boost"],
+}
+
+func _place_crit_box(side : int, x : float, above : float, w : float, near : Control) -> float:
+	var lines : Array = _critical_lines(side)
+	var box : PanelContainer = _crit_boxes[side]
+	if lines.is_empty():
+		if box != null and is_instance_valid(box):
+			box.visible = false
+		return above
+	if box == null or not is_instance_valid(box):
+		box = PanelContainer.new()
+		box.name = "CritBox%d" % side
+		box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		box.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+		var fire = load("res://scenes/game/critical_fire_panel.gd").new()
+		fire.name = "Fire"
+		fire.intensity = 0.55   # (low flames, and a veil, so the text reads)
+		fire.scrim = 0.35
+		fire.radius = 12.0
+		box.add_child(fire)
+		var mc := MarginContainer.new()
+		mc.name = "Margin"
+		mc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		for m in ["margin_left", "margin_right"]:
+			mc.add_theme_constant_override(m, 12)
+		for m in ["margin_top", "margin_bottom"]:
+			mc.add_theme_constant_override(m, 7)
+		box.add_child(mc)
+		# (rich text: the timings in bold, stat changes in their stat's colour, like the other boxes)
+		var lab := RichTextLabel.new()
+		lab.name = "Text"
+		lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		lab.bbcode_enabled = true
+		lab.fit_content = true
+		lab.scroll_active = false
+		lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		for fk in ["normal_font_size", "bold_font_size", "italics_font_size", "bold_italics_font_size"]:
+			lab.add_theme_font_size_override(fk, CRIT_FONT)
+		lab.add_theme_color_override("default_color", Color(1.0, 0.97, 0.88))
+		lab.add_theme_color_override("font_outline_color", Color(0.25, 0.02, 0.0))
+		lab.add_theme_constant_override("outline_size", 6)
+		mc.add_child(lab)
+		var parent : Node = near.get_parent() if near != null else backdrop
+		parent.add_child(box)
+		if near != null:
+			box.z_index = near.z_index
+		_crit_boxes[side] = box
+	var lab2 : RichTextLabel = box.get_node("Margin/Text")
+	var txt := "[center]%s[/center]" % color_stat_text("\n".join(PackedStringArray(lines)))
+	if lab2.text != txt:
+		lab2.text = txt
+	lab2.custom_minimum_size = Vector2(w - 24.0, 0.0)
+	box.size = Vector2(w, 0.0)
+	box.size = box.get_combined_minimum_size()
+	if not box.visible:
+		box.visible = true
+		_grow_in(box)
+	# (in the parent's own coordinates, like the bonus box it sits on)
+	box.position = Vector2(x, above - box.size.y - 3.0)
+	return box.position.y
+
+func _critical_lines(side : int) -> Array:
+	if not _strike_status[side].has("critical") or int(_crit_card[side]) < 0:
+		return []
+	var key := str(_crit_card[side])
+	if _crit_cache[side] == key:
+		return _crit_lines_cache[side]
+	_crit_cache[side] = key
+	var out : Array = []
+	var lc = game.game_wrapper.get_card_database().get_card(int(_crit_card[side]))
+	if lc != null and CRITICAL_TEXT.has(str(lc.definition.get("id", ""))):
+		# (worded as on the card: {card} is the attack's name)
+		for line in CRITICAL_TEXT[str(lc.definition["id"])]:
+			out.append(str(line).replace("{card}", str(lc.definition.get("display_name", ""))))
+		lc = null
+	if lc != null:
+		for e in lc.definition.get("effects", []):
+			if not (e is Dictionary) or str(e.get("condition", "")) != "is_critical":
+				continue
+			var d : Dictionary = e.duplicate(true)
+			d.erase("condition")
+			var rest = _strip_crit_chain(d)
+			if rest == null:
+				continue
+			if d.has("timing") and not rest.has("timing"):
+				rest["timing"] = d["timing"]
+			var txt := str(GameStrings.get_effect_text(rest)).strip_edges()
+			for lead in ["Critical, ", "Critical: ", "Crit: ", "Critical "]:
+				if txt.begins_with(lead):
+					txt = txt.substr(lead.length()).strip_edges()
+			# (tidying the generated wording: a "Pass" that only carries a condition, and a full
+			# stop left in front of a comma: "does not hit., Gain Advantage")
+			txt = txt.replace("[/b] Pass, ", "[/b] ").replace(".,", ",")
+			if txt.begins_with("Pass, "):
+				txt = txt.substr(6)
+			if txt.ends_with(","):
+				txt = txt.trim_suffix(",")
+			if txt != "":
+				out.append(txt)
+	_crit_lines_cache[side] = out
+	return out
+
+# Takes the effects shown elsewhere (badges, stat gems) out of an "and" chain; returns what is
+# left (null if nothing).
+func _strip_crit_chain(e):
+	if not (e is Dictionary):
+		return null
+	var rest = _strip_crit_chain(e["and"]) if e.has("and") else null
+	var shown_elsewhere : bool = _badge_kind(e) != "" or _is_plain_stat_effect(e)
+	if shown_elsewhere:
+		if rest != null and e.has("timing") and not rest.has("timing"):
+			rest["timing"] = e["timing"]
+		return rest
+	if rest == null:
+		e.erase("and")
+	else:
+		e["and"] = rest
+	return e
+
+var _plain_stat_re : RegEx
+func _is_plain_stat_effect(e : Dictionary) -> bool:
+	if _plain_stat_re == null:
+		_plain_stat_re = RegEx.new()
+		_plain_stat_re.compile("^(opponent_)?(power|speed|armor|guard|range)up(_opponent)?$")
+	if e.has("condition") or _plain_stat_re.search(str(e.get("effect_type", ""))) == null:
+		return false
+	return str(e.get("amount", "")).is_valid_float()
 
 const BONUS_FONT_MAX := 21
 const BONUS_FONT_MIN := 14 # below this, text in the bonus box gets hard to read on a phone
@@ -2664,6 +3044,11 @@ const CHANGE_HOLD_TTL := 8.0
 func should_hold_events(delta : float) -> bool:
 	var flights := _center_flight_busy()
 	var busy : bool = strike_stage != null and strike_stage._active and flights
+	# Mid-strike, an action banner (CRITICAL, PAY FORCE, DISCARD...) is seen out before what comes
+	# next (a life gem, the next effect...).
+	if not busy and strike_stage != null and (strike_stage._active or _gem_strike) \
+			and strike_stage.action_banner_showing():
+		busy = true
 	# Changing cards (either player's): what follows waits for the last changed card to finish its
 	# stop at the center. (Armed by the ChangeCards event; its cards may only start a moment later,
 	# so it stays armed until they have been and gone.)
@@ -2679,7 +3064,22 @@ func should_hold_events(delta : float) -> bool:
 		_event_hold_elapsed = 0.0
 		return false
 	_event_hold_elapsed += delta
-	return _event_hold_elapsed < EVENT_HOLD_MAX
+	# (a Change Cards of several cards takes longer than a strike's few: its own, longer cap)
+	var cap : float = CHANGE_HOLD_TTL if _change_hold_armed_at >= 0.0 else EVENT_HOLD_MAX
+	return _event_hold_elapsed < cap
+
+# Game._handle_events: a draw that comes while changed cards are still queued for, or paused at,
+# the screen center waits (once) until the last of them has gone on, so the new hand cards
+# don't come in under the cards in focus.
+func should_defer_draw(event) -> bool:
+	if not USE_CENTER_STOP_FLIGHTS or catching_up() or _change_hold_armed_at < 0.0:
+		return false
+	if event["event_type"] != Enums.EventType.EventType_Draw or event.get("phone_draw_deferred", false):
+		return false
+	if not _center_flight_busy():
+		return false
+	event["phone_draw_deferred"] = true
+	return true
 
 func _center_flight_busy() -> bool:
 	if _center_current != null and is_instance_valid(_center_current):
@@ -2892,6 +3292,7 @@ var current_action_banner : String = "" # (set by StrikeStage.show_action_banner
 # again when the event comes).
 # (A character action's banner: also used for its pre-confirmation.)
 const UNIQUE_ACTION_BANNER := "UNIQUE ACTION"
+const CRITICAL_BANNER := "CRITICAL"
 
 # `from_hand`: the card is paid from a hand (only a character action's cost is looked for then;
 # EXCEED is paid with gauge). Returns true when it brought a banner up (or one already is).
@@ -2910,6 +3311,8 @@ func _banner_ahead(from_hand : bool = false) -> bool:
 		var text := ""
 		if et == E.EventType_Exceed and not from_hand:
 			text = "EXCEED"
+		elif et == E.EventType_Strike_Critical and not from_hand:
+			text = CRITICAL_BANNER # (its gauge is being paid)
 		elif et == E.EventType_CharacterAction:
 			# A character action paid for with force / gauge: its own banner (not a payment one)
 			# while its cost goes through the center.
@@ -4398,6 +4801,9 @@ func refresh_gauge() -> void:
 	if not _built:
 		return
 	var g = game
+	# (gauge-linked boosts, e.g. Psycho Power: their gem follows the gauge)
+	if USE_STAT_GEMS and not (_boost_card_ids[0].is_empty() and _boost_card_ids[1].is_empty()):
+		_update_gem_values()
 	for side in range(2):
 		var is_p := side == 0
 		var zone : Node = g.get_node("AllCards/PlayerGauge" if is_p else "AllCards/OpponentGauge")
@@ -4864,7 +5270,8 @@ func refresh_counts() -> void:
 	var text := exceed_ability_text if (exceeded and exceed_ability_text != "") else ability_text
 	# ("When you Exceed" effects aren't shown here: the bonus box shows them on your turn, while
 	# you have the gauge to exceed. See _update_exceed_note.)
-	text = _without_exceed_lines(text)
+	if not str(g.player_deck.get("id", "")) in ABILITY_KEEPS_EXCEED_LINES:
+		text = _without_exceed_lines(text)
 	var shown := "[center]%s[/center]" % text
 	if ability_label.text != shown:
 		ability_label.text = shown
@@ -5346,9 +5753,25 @@ func _place_phone_extras() -> void:
 		b.size = Vector2(sq, sq)
 	var slot := _bottom_slot_size()
 	var discard_pos := Vector2(W - 8 - slot.x, bottom_y + (bottom_h - slot.y) / 2.0)
-	var hs := 40.0
+	var hs := 48.0
 	help_btn.size = Vector2(hs, hs)
 	help_btn.position = Vector2(discard_pos.x + slot.x - hs, discard_pos.y - hs - 4.0)
+	# The season mechanic buttons line up to the left of the "?" (whichever are shown).
+	var next_x : float = help_btn.position.x
+	for pair in [[crit_help_btn, _season_in_match(3)], [cancel_help_btn, _season_in_match(7)]]:
+		var mb : Button = pair[0]
+		if mb == null or not is_instance_valid(mb):
+			continue
+		mb.visible = pair[1]
+		if not mb.visible:
+			continue
+		next_x -= hs + 8.0
+		mb.size = Vector2(hs, hs)
+		mb.position = Vector2(next_x, help_btn.position.y)
+		var sym = mb.get_node_or_null("Symbol")
+		if sym != null:
+			sym.position = Vector2(2, 2)
+			sym.size = Vector2(hs - 4.0, hs - 4.0)
 
 const HELP_LINES := [
 	"[b]Prepare[/b]: tap your hand icon (next to your deck)",
@@ -5408,6 +5831,101 @@ func show_help() -> void:
 	panel.add_child(rt)
 	help_root.add_child(panel)
 	panel.position = Vector2(20, top_h + 20)
+
+# ---- Season 3: the Critical mechanic ------------------------------------------------------------
+var crit_help_btn : Button = null
+var cancel_help_btn : Button = null
+var crit_help_root : Node2D = null
+
+func _deck_season(deck) -> int:
+	if not (deck is Dictionary):
+		return 0
+	return int(float(str(deck.get("season", 0))))
+
+func _season3_in_match() -> bool:
+	return _season_in_match(3)
+
+func _season_in_match(season : int) -> bool:
+	return _deck_season(game.player_deck) == season or _deck_season(game.opponent_deck) == season
+
+# A marble window in the middle of the screen explaining Critical; a tap anywhere closes it.
+func show_crit_help() -> void:
+	_show_mechanic_help("res://scenes/game/critical_symbol.gd", "Street Fighter season mechanic: Critical",
+			"You may pay 1 Gauge when you set your attack to activate all Critical triggers during that Strike")
+
+# Season 7 (Guilty Gear): the Cancel mechanic, the same way.
+func show_cancel_help() -> void:
+	_show_mechanic_help("res://scenes/game/cancel_symbol.gd", "Guilty Gear season mechanic: Cancel",
+			"You may pay 1 Gauge after resolving a Cancelable Boost to take another action")
+
+# A season mechanic's marble window: its symbol at the top, the title under it, then the text.
+func _show_mechanic_help(symbol_path : String, title_text : String, body_text : String) -> void:
+	if crit_help_root != null and is_instance_valid(crit_help_root):
+		close_crit_help()
+		return
+	crit_help_root = Node2D.new()
+	crit_help_root.z_index = 90
+	game.add_child(crit_help_root)
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.6)
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	dim.size = Vector2(W, H)
+	crit_help_root.add_child(dim)
+	var close_btn := _flat_button(crit_help_root, close_crit_help)
+	close_btn.size = Vector2(W, H)
+	var panel := PanelContainer.new()
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sb := _marble_style("panel").duplicate() as StyleBoxTexture
+	sb.content_margin_left = 30
+	sb.content_margin_right = 30
+	sb.content_margin_top = 24
+	sb.content_margin_bottom = 26
+	panel.add_theme_stylebox_override("panel", sb)
+	var vb := VBoxContainer.new()
+	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vb.add_theme_constant_override("separation", 14)
+	panel.add_child(vb)
+	var sym = load(symbol_path).new()
+	sym.custom_minimum_size = Vector2(56, 56)
+	sym.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	vb.add_child(sym)
+	var title := Label.new()
+	title.text = title_text
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title.custom_minimum_size = Vector2(W - 140.0, 0)
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	title.add_theme_font_size_override("font_size", 30)
+	title.add_theme_color_override("font_color", Color(1.0, 0.9, 0.62))
+	title.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	title.add_theme_constant_override("outline_size", 6)
+	vb.add_child(title)
+	var body := Label.new()
+	body.text = body_text
+	body.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	body.custom_minimum_size = Vector2(W - 140.0, 0)
+	body.add_theme_font_size_override("font_size", 25)
+	body.add_theme_color_override("font_color", Color(1, 1, 1))
+	body.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	body.add_theme_constant_override("outline_size", 5)
+	vb.add_child(body)
+	crit_help_root.add_child(panel)
+	panel.reset_size()
+	panel.position = (Vector2(W, H) - panel.size) / 2.0
+	# (grows in from the middle)
+	panel.pivot_offset = panel.size / 2.0
+	panel.scale = Vector2(0.85, 0.85)
+	panel.modulate.a = 0.0
+	var tw := panel.create_tween().set_parallel(true)
+	tw.tween_property(panel, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(panel, "modulate:a", 1.0, 0.15)
+
+func close_crit_help() -> void:
+	if crit_help_root != null and is_instance_valid(crit_help_root):
+		crit_help_root.queue_free()
+	crit_help_root = null
 
 func close_help() -> void:
 	if help_root != null and is_instance_valid(help_root):
@@ -5715,12 +6233,27 @@ func _wire_phone_controls() -> void:
 		sqb.z_index = 2
 		_wire_tap_hold(sqb, func(): _square_tap(loc), Callable())
 		arena_sq_btns.append(sqb)
-	help_btn = _text_button(backdrop, "?", show_help, 30)
+	help_btn = _text_button(backdrop, "?", show_help, 38)
 	help_btn.add_theme_font_override("font", load("res://scenes/game/badge_font.gd").make_font())
 	help_btn.add_theme_color_override("font_color", Color.WHITE)
 	help_btn.add_theme_color_override("font_outline_color", Color.WHITE)
 	help_btn.add_theme_constant_override("outline_size", 3)
 	help_btn.z_index = 12
+	# Season 3 in the match (either player): a Critical-symbol button beside the "?" that explains
+	# the season mechanic. (Made now, shown once the decks are known: _place_phone_extras.)
+	crit_help_btn = _flat_button(backdrop, show_crit_help)
+	crit_help_btn.z_index = 12
+	crit_help_btn.visible = false
+	var sym = load("res://scenes/game/critical_symbol.gd").new()
+	sym.name = "Symbol"
+	crit_help_btn.add_child(sym)
+	# Season 7 in the match (either player): a Cancel-symbol button, the same way.
+	cancel_help_btn = _flat_button(backdrop, show_cancel_help)
+	cancel_help_btn.z_index = 12
+	cancel_help_btn.visible = false
+	var csym = load("res://scenes/game/cancel_symbol.gd").new()
+	csym.name = "Symbol"
+	cancel_help_btn.add_child(csym)
 	# The stock arena squares would swallow taps meant for the icon buttons below;
 	# their inner (selection) buttons still work, since those are separate controls.
 	g.arena_layout.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -5944,6 +6477,7 @@ func _build_badge_map(deck : Dictionary) -> Dictionary:
 		result[specials[i][1]] = {
 			"text": ROMAN[i] if i < ROMAN.size() else str(i + 1),
 			"color": SPECIAL_COLORS[i % SPECIAL_COLORS.size()],
+			"s3": int(float(str(deck.get("season", 0)))) == 3,
 		}
 	for i in range(ultras.size()):
 		result[ultras[i][1]] = {
@@ -6340,7 +6874,17 @@ func _build_reference_list(popout : Control) -> void:
 			var o : int = order.get(str(def.get("type", "")), -1)
 			if o < 0:
 				continue
-			entries.append([o, idx, card, maxi(card.get_remaining_count(), 0), [card]])
+			# Specials and ultras are listed in the order of their markers (I, II, III... and
+			# α, β, γ...), whatever order the deck's cards come in.
+			var pos := idx
+			var mark : String = str(badge_for(def, not is_p).get("text", ""))
+			if mark != "":
+				var rank : int = (ROMAN if o == 1 else GREEK).find(mark)
+				if rank < 0 and mark.is_valid_int():
+					rank = int(mark) - 1
+				if rank >= 0:
+					pos = -1000 + rank
+			entries.append([o, pos, card, maxi(card.get_remaining_count(), 0), [card]])
 			idx += 1
 	else:
 		# Copies of the same card share a row (the most recently added copy represents it).
@@ -6444,7 +6988,7 @@ func _build_reference_list(popout : Control) -> void:
 		var count : int = e[3]
 		var group : Array = e[4]
 		var cell := PanelContainer.new()
-		cell.custom_minimum_size = Vector2(cell_w, 42.0)
+		cell.custom_minimum_size = Vector2(cell_w, REF_ROW_H)
 		cell.add_theme_stylebox_override("panel", _ref_cell_style(false))
 		cell.modulate = Color(1, 1, 1, 1.0 if count > 0 else 0.5)
 		cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -6569,6 +7113,10 @@ func _update_confirm_banner(confirming : bool) -> void:
 			var asked : String = instr.substr(ASK.length()).trim_suffix("?").strip_edges()
 			# (a character action with nothing to pay: confirmed with its own banner word)
 			word = UNIQUE_ACTION_BANNER if _is_character_action_name(asked) else asked.to_upper()
+		elif _is_reading_choice(g.game_wrapper.get_decision_info()) or not _range_picks().is_empty():
+			# Choices made with the island's buttons (the opponent's Reading named a card in your
+			# hand; naming a Range): SELECT, a reminder to look at the island.
+			word = "SELECT"
 		elif selecting and g.game_wrapper.get_game_state() == Enums.GameState.GameState_DiscardDownToMax:
 			# Discarding down to the hand size: how many are picked so far. (Confirmed, it grows into
 			# the HAND LIMIT banner as the cards go.)
@@ -6578,6 +7126,10 @@ func _update_confirm_banner(confirming : bool) -> void:
 			# The start of the match: choosing cards to mulligan. (Confirmed with cards, it grows into
 			# the MULLIGAN banner as they go; passed, it fades.)
 			word = "MULLIGAN"
+		elif selecting and _is_critical_gauge_choice():
+			# Season 3: picking the gauge to pay for Critical. (Confirmed, it grows into the
+			# CRITICAL banner as the gauge goes: see _banner_ahead.)
+			word = "CRITICAL"
 		elif selecting and g.ui_sub_state == g.UISubState.UISubState_SelectCards_CharacterAction_Force:
 			# Paying a character action's force cost.
 			var need_f := int(g.select_card_require_force)
@@ -6629,6 +7181,18 @@ func _update_confirm_banner(confirming : bool) -> void:
 			# options, cards to pick for it...).
 			word = "SELECT"
 	strike_stage.set_mini_banner(word, word_side)
+
+# Choosing gauge to spend on Critical (a Season 3 character's "pay 1 Gauge when you set your
+# attack" ability).
+func _is_critical_gauge_choice() -> bool:
+	var g = game
+	if g.ui_state != g.UIState.UIState_SelectCards or g.ui_sub_state != g.UISubState.UISubState_SelectCards_GaugeForEffect:
+		return false
+	var di = g.game_wrapper.get_decision_info()
+	if di == null or not (di.effect is Dictionary):
+		return false
+	var overall = di.effect.get("overall_effect")
+	return overall is Dictionary and str(overall.get("effect_type", "")) == "critical"
 
 # One of your character actions' names ("Character Action" when it has none), as the game puts it
 # in its "Are you sure you want to ...?" confirmation.
@@ -6772,6 +7336,9 @@ func boost_card_played(card, is_player : bool, facedown = false) -> void:
 	# the boost has resolved into the box (or been discarded).
 	card.set_meta("phone_boost_side", 0 if is_player else 1)
 	card.set_meta("phone_boost_facedown", facedown)
+	# (when it was played: see _update_hidden_boosts, whether its strike may still be coming)
+	card.set_meta("phone_boost_turn", _turn_serial)
+	card.set_meta("phone_boost_strike_serial", _strike_serial)
 	if not card.has_meta("phone_boost_flying") and not facedown:
 		_show_resolving_boost(card)
 
@@ -6785,6 +7352,9 @@ func _show_resolving_boost(card) -> void:
 	else:
 		_resolving_boost[side] = card
 		_boost_linger[side] = false
+		if not card.has_meta("phone_boost_turn"):
+			card.set_meta("phone_boost_turn", _turn_serial)
+			card.set_meta("phone_boost_strike_serial", _strike_serial)
 	_refresh_boost_summary(side)
 
 var _pending_boosts : Array = [[], []]
@@ -6803,6 +7373,8 @@ func pending_boost_cards(side : int) -> Array:
 # Boost box wording: a start-of-turn trigger reads "Start:", and a boost that refers to itself
 # ("add this to your Gauge", "Discard this boost", "Add card to gauge"...) names itself instead.
 var _start_re : RegEx
+var _end_gauge_re : RegEx
+var _both_timing_re : RegEx
 var _self_res : Array = []
 func phrase_boost_text(text : String, bname : String) -> String:
 	if _start_re == null:
@@ -6812,6 +7384,20 @@ func phrase_boost_text(text : String, bname : String) -> String:
 				"(?i)\\b(add) card(?= to gauge(?! after strike))"]:
 			_self_res.append(RegEx.create_from_string(pat))
 	var t := text
+	# A boost that goes to the gauge at the end of the (next) turn: "END: Add <boost> to Gauge".
+	if _end_gauge_re == null:
+		_end_gauge_re = RegEx.create_from_string("(?i)(?:\\[b\\])?\\s*at (?:the )?end of (?:your )?(?:next )?turn\\s*[:,]?\\s*(?:\\[/b\\])?\\s*add (?:this card|this boost|this|card) to (?:your )?gauge\\.?")
+	if bname != "":
+		t = _end_gauge_re.sub(t, "[b]END:[/b] Add %s to Gauge" % bname, true)
+	# "Both players before: +1 Power" (a boost affecting both players) reads "Before: Both players +1 Power".
+	if _both_timing_re == null:
+		_both_timing_re = RegEx.create_from_string("(?i)\\[b\\]\\s*both players (\\w+):\\s*\\[/b\\]\\s*")
+	var bm := _both_timing_re.search(t)
+	while bm != null:
+		var timing := bm.get_string(1)
+		var repl := "[b]%s:[/b] Both players " % (timing.substr(0, 1).to_upper() + timing.substr(1))
+		t = t.substr(0, bm.get_start()) + repl + t.substr(bm.get_end())
+		bm = _both_timing_re.search(t, bm.get_start() + repl.length())
 	# (A timing already in bold loses its own bold tags first.)
 	t = RegEx.create_from_string("(?i)\\[b\\]\\s*(at (?:the )?start of (?:your |your next |next )?turn\\s*[,:]?)\\s*\\[/b\\]\\s*").sub(t, "$1 ", true)
 	# "Start:" (bold), with the next word capitalised.
@@ -6874,7 +7460,10 @@ func _update_hidden_boosts() -> void:
 		# strike keeps its text up until that strike's card is chosen: _track_boost_linger.)
 		for side in range(2):
 			if _resolving_boost[side] == card and not _boost_linger[side]:
-				if _boost_starts_strike(card):
+				# (only while its turn is still going: if the turn has already ended - e.g. Peek's
+				# card went to the gauge instead of striking - there is no strike to wait for)
+				if _boost_starts_strike(card) and int(card.get_meta("phone_boost_turn", -1)) == _turn_serial \
+						and not _strike_declared_since(card):
 					_boost_linger[side] = true
 				else:
 					_resolving_boost[side] = null
@@ -6890,6 +7479,12 @@ func _update_hidden_boosts() -> void:
 			_hidden_boost_cards.erase(card)
 
 var _boost_linger : Array = [false, false]
+var _turn_serial : int = 0 # counts turns (AdvanceTurn events), for the lingering instant boosts
+
+# A strike was declared after this instant boost was played (its strike card already chosen).
+func _strike_declared_since(card) -> bool:
+	return int(card.get_meta("phone_boost_strike_serial", -1)) != _strike_serial
+var _strike_serial : int = 0
 
 func _boost_starts_strike(card) -> bool:
 	var lc = game.game_wrapper.get_card_database().get_card(card.card_id)
@@ -6901,10 +7496,14 @@ func _boost_starts_strike(card) -> bool:
 # A lingering instant boost's text goes once its strike has been declared (the card chosen), or
 # the turn is over.
 func _track_boost_linger(event) -> void:
-	if not (_boost_linger[0] or _boost_linger[1]):
-		return
 	var E = Enums.EventType
 	var et = event["event_type"]
+	if et == E.EventType_AdvanceTurn:
+		_turn_serial += 1
+	elif et in [E.EventType_Strike_Started, E.EventType_Strike_Started_Ex, E.EventType_Strike_WildStrike]:
+		_strike_serial += 1
+	if not (_boost_linger[0] or _boost_linger[1]):
+		return
 	var pid := int(event["event_player"])
 	var side := 0 if pid == int(Enums.PlayerId.PlayerId_Player) else 1
 	var sides : Array = []
@@ -7014,6 +7613,19 @@ func on_strike_cards_flipped() -> void:
 	if _gem_strike and not _strike_revealed:
 		_strike_revealed = true
 		_update_gem_values()
+		# (boost text that names the attack, e.g. Repeating Attack's "recur Lightning Legs")
+		_refresh_boost_summary(0)
+		_refresh_boost_summary(1)
+
+# The name of a side's attack in the current strike, once it may be shown (yours as soon as it
+# is set, the opponent's once face up); "your attack" otherwise.
+func _strike_card_name(side : int) -> String:
+	if side < 0 or not _gem_strike or int(_strike_card_ids[side]) < 0 or (side == 1 and not _strike_revealed):
+		return "your attack"
+	var lc = game.game_wrapper.get_card_database().get_card(int(_strike_card_ids[side]))
+	if lc == null:
+		return "your attack"
+	return str(lc.definition.get("display_name", "your attack"))
 
 # The printed stat of a side's strike card as [lo, hi] (Range: min and max), or [] when it isn't
 # known yet (cards still face down, or a value like "X" not set).
@@ -7285,6 +7897,39 @@ func join_stat_lines(text : String) -> String:
 # Printed wording in the boost windows on the board, where statuses shown as badges are left out.
 const PRINTED_BOOST_AREA_TEXT := {
 	"Drunkard Shade": "At the start of your turn, add this to your Gauge.",
+	# Season 3: its Power follows the gauge (shown in the Power gem, see _linked_boost_stats).
+	"Psycho Power": "Psycho Power: [b][color=#ff4b4b]Gauge Link[/color][/b]",
+	"Die One Thousand Deaths!": "[b][color=#ff4b4b]Power x2[/color][/b]",
+	# ({attack}: the attack it would return, once known: see boost_text_override)
+	"Repeating Attack": "[b]AFTER:[/b] If you hit, recur {attack} and add Repeating Attack to Gauge",
+	# ---- Season 7 (Guilty Gear Strive): cleaned-up wording. Stat-only lines go to the gems. ----
+	"Shin: Ichishiki": "+1 Speed\n[b]Hit:[/b] Push 1 or 2",
+	"Wise Remarks": "+1 Power\n[b]After:[/b] If the opponent is stunned, draw 1",
+	"Be Just or Be Dead": "+1 Speed\n[b]After:[/b] If the opponent is stunned, draw 1",
+	"Shogun!": "+1 Speed\n[b]Hit:[/b] The opponent discards 1 card",
+	"Sushi!": "[b]Before:[/b] If you're at the arena edge, Advance 3",
+	"Sukiyaki!": "[b]After:[/b] Add Sukiyaki! to Gauge, undoing its effects",
+	"Defend Command": "+1 Power, +2 Armor\n[b]After:[/b] Lose all Armor. You may add Defend Command to Gauge",
+	"Attack Command": "+1 Speed\n[b]Hit:[/b] You may add Attack Command to Gauge",
+	"Sweet Tooth": "[b]Hit:[/b] Draw 1, then add a card from your hand to Gauge",
+	"Bared Fangs": "If you Wild Swing, +2 Speed",
+	"Roar of the Lion": "If you Wild Swing, +2 Power",
+	"Love the Subhuman Self": "+1 Speed\n[b]Hit:[/b] Draw 1 or gain Advantage",
+	"Lust Shaker": "[b]Hit:[/b] Spend up to 3 Force: +1 Power and Push 1 for each",
+	"Turbo Fall": "[b]Before:[/b] Advance or Retreat 1\n[b]Hit:[/b] Gain Advantage",
+	"Burly Heart": "If you initiated, +2 Power\nIf the opponent initiated, +3 Armor",
+	"Steadfast": "If you initiated, +1 Speed\nIf the opponent initiated, +4 Guard",
+	"Huge": "+0-1 Range\n[b]Hit:[/b] Push or Pull 1",
+	"Delayed Explosion": "[b]Hit:[/b] Push 1; if it falls short, +2 Power",
+	"Flame of Corruption": "[b]Before:[/b] Close 1; if it falls short, +2 Power",
+	"Bandit Revolver": "[b]Hit:[/b] The opponent discards 1 random card",
+	"Sadism": "+2 Power\n[b]After:[/b] If the opponent is stunned, they discard 2 random cards",
+	"Requiem": "+1 Power, +1 Speed\n[b]Hit:[/b] You may spend 2 Gauge to sustain Requiem",
+	"The Midnight Carnival": "[b]Hit:[/b] Discard 1 card from the opponent's Gauge, or draw 1 and add The Midnight Carnival to Gauge",
+	"Thunderbird": "[b]Start:[/b] Close 2, then discard Thunderbird",
+	"Break the law": "[b]After:[/b] Advance or Retreat 1-2",
+	"Feel a Fear": "[b]Hit:[/b] If the opponent is between you and Eddie, +3 Power",
+	"Rock You": "[b]Hit:[/b] +1 Power, draw 1\n[b]After:[/b] If the opponent is stunned, gain Advantage",
 	# Faust's items affect both players (shown in both players' boost boxes, see below).
 	"Banana Peel/Donut": "[b]Before:[/b] Advance 1\n[b]After:[/b] Discard Donut",
 	"Bomb/Meteors": "Take 3 non-lethal damage. Discard Meteors",
@@ -7315,11 +7960,11 @@ func shared_boost_lines(side : int) -> Array:
 			out.append(phrase_boost_text(t, str(lc.definition["boost"].get("display_name", ""))))
 	return out
 
-func boost_text_override(card_def : Dictionary, for_boost_area : bool = false) -> String:
+func boost_text_override(card_def : Dictionary, for_boost_area : bool = false, side : int = -1) -> String:
 	var boost = card_def.get("boost", {})
 	var bname := str(boost.get("display_name", ""))
 	if for_boost_area and PRINTED_BOOST_AREA_TEXT.has(bname):
-		return str(PRINTED_BOOST_AREA_TEXT[bname])
+		return str(PRINTED_BOOST_AREA_TEXT[bname]).replace("{attack}", _strike_card_name(side))
 	return str(PRINTED_BOOST_TEXT.get(bname, ""))
 
 # ---- Boost effects shown as status badges ---------------------------------------------------------
@@ -7333,7 +7978,7 @@ func extract_badge_effects(effects : Array, found : Dictionary) -> Array:
 		if e is Dictionary and str(e.get("effect_type", "")) == "opponent_wild_swings" and not e.has("condition"):
 			found["forces_wild"] = true # (Scramble: a WILD SWING badge on the opponent, see below)
 			continue # (shown by the badge, not in the boost box)
-		if not (e is Dictionary) or str(e.get("timing", "")) != "during_strike" or e.has("condition") \
+		if not (e is Dictionary) or not _badge_timing_ok(e) or e.has("condition") \
 				or e.has("override_description"):
 			out.append(e)
 			continue
@@ -7342,6 +7987,18 @@ func extract_badge_effects(effects : Array, found : Dictionary) -> Array:
 			rest["timing"] = e["timing"]
 			out.append(rest)
 	return out
+
+# Badge effects are the boost's during-strike ones; also its lasting "can't be pushed or pulled" /
+# "can't be moved past" (taking effect when it's played), and "the strike is Critical" when the
+# attack is set (Unstoppable).
+func _badge_timing_ok(e : Dictionary) -> bool:
+	var timing := str(e.get("timing", ""))
+	if timing == "during_strike":
+		return true
+	var kind := _badge_kind(e)
+	if timing == "now" and kind in ["grounded", "barrier"]:
+		return true
+	return timing == "set_strike" and kind == "critical"
 
 # In the boost box a boost goes by its boost name: effects that name the card by its attack
 # name ("Hit: Add Issei Ougi: Sai to gauge" for Fuuga) name the boost instead.
@@ -7378,6 +8035,10 @@ func _badge_kind(e : Dictionary) -> String:
 		return "dodge"
 	if t == "attack_is_ex":
 		return "ex" # (Badass!: the EX badge, and +1 in the four EX stat gems)
+	if t in ["ignore_push_and_pull", "ignore_push_and_pull_passive_bonus"]:
+		return "grounded"
+	if t == "opponent_cant_move_past":
+		return "barrier"
 	if STATUS_BADGES.has(t):
 		return t
 	return ""
@@ -7475,11 +8136,57 @@ func set_opponent_boost_stats(target_side : int, totals : Dictionary) -> void:
 func _boost_stat_total(side : int, stat : String) -> Array:
 	var found := false
 	var v := [0, 0]
-	for d in [_boost_stats[side], _opp_boost_stats[side]]:
+	for d in [_boost_stats[side], _opp_boost_stats[side], _linked_boost_stats(side)]:
 		if d.has(stat):
 			found = true
 			v = [v[0] + int(d[stat][0]), v[1] + int(d[stat][1])]
 	return v if found else []
+
+# Boosts whose stat change follows the game, not a fixed number: Psycho Power (+1 Power per
+# Gauge, up to 5: it changes as the gauge does) and Instant Hell Murder (+3 Speed while the
+# boosts' Power bonuses come to +3 or more). Worked out each time the gems update; the gauge
+# strip refreshes the gems when the gauge changes (refresh_gauge).
+func _linked_boost_stats(side : int) -> Dictionary:
+	var out := {}
+	var ids : Array = _boost_card_ids[side]
+	if ids.is_empty() or game.game_wrapper == null or game.game_wrapper.current_game == null:
+		return out
+	var db = game.game_wrapper.get_card_database()
+	var pid := Enums.PlayerId.PlayerId_Player if side == 0 else Enums.PlayerId.PlayerId_Opponent
+	var opp := Enums.PlayerId.PlayerId_Opponent if side == 0 else Enums.PlayerId.PlayerId_Player
+	var conditional : Array = []
+	for id in ids:
+		var lc = db.get_card(id)
+		if lc == null or str(lc.definition.get("boost", {}).get("boost_type", "")) != "continuous":
+			continue
+		for e in lc.definition["boost"].get("effects", []):
+			if not (e is Dictionary) or str(e.get("timing", "")) != "during_strike":
+				continue
+			var et := str(e.get("effect_type", ""))
+			if et == "powerup_per_gauge" and not e.has("condition"):
+				var gauge := int(game.game_wrapper.get_player_gauge_size(opp if e.get("count_opponent", false) else pid))
+				var amt := mini(gauge * int(e.get("amount", 1)), int(e.get("amount_max", 999)))
+				var cur : Array = out.get("Power", [0, 0])
+				out["Power"] = [int(cur[0]) + amt, int(cur[1]) + amt]
+			elif str(e.get("condition", "")) == "total_powerup_greater_or_equal" and _is_plain_stat_effect_ignoring_condition(e):
+				conditional.append(e)
+	if not conditional.is_empty():
+		# (the Power the boosts give: the fixed ones and the gauge-linked ones, positive only)
+		var power := 0
+		for d in [_boost_stats[side], out]:
+			if d.has("Power"):
+				power += maxi(0, int(d["Power"][0]))
+		for e in conditional:
+			if power >= int(e.get("condition_amount", 0)):
+				var stat := str(e["effect_type"]).trim_suffix("up").capitalize()
+				var amt2 := int(e.get("amount", 0))
+				var cur2 : Array = out.get(stat, [0, 0])
+				out[stat] = [int(cur2[0]) + amt2, int(cur2[1]) + amt2]
+	return out
+
+func _is_plain_stat_effect_ignoring_condition(e : Dictionary) -> bool:
+	return str(e.get("effect_type", "")) in ["powerup", "speedup", "armorup", "guardup"] \
+			and str(e.get("amount", "")).is_valid_float() and not e.has("and")
 
 # ---- A boost leaving play mid-strike -----------------------------------------------------------
 # When a boost leaves play during a strike (Sukiyaki!'s "After: add this to gauge, undoing its
@@ -7681,12 +8388,34 @@ func on_game_event(event) -> float:
 			var dodge_side := 0 if int(event["event_player"]) == int(Enums.PlayerId.PlayerId_Player) else 1
 			_strike_dodge[dodge_side] = true
 			_show_dodge(dodge_side, _dodge_label(event))
+		elif et == E.EventType_Strike_AttackDoesNotHit:
+			# An effect that makes one side's attack not hit (Nightmare Booster's Critical "Hit:"):
+			# the other side gets the DODGE badge for the rest of the strike.
+			var miss_side := 0 if int(event["event_player"]) == int(Enums.PlayerId.PlayerId_Player) else 1
+			_strike_dodge[1 - miss_side] = true
+			_show_dodge(1 - miss_side, "DODGE")
 		elif et == E.EventType_Strike_Stun:
 			var stun_side := 0 if int(event["event_player"]) == int(Enums.PlayerId.PlayerId_Player) else 1
 			_show_stun(stun_side)
 		elif et == E.EventType_Strike_ExUp:
 			# An effect made the attack EX (e.g. Badass!): the EX badge for the rest of the strike.
 			show_ex_badge(int(event["event_player"]) == int(Enums.PlayerId.PlayerId_Player))
+		elif et == E.EventType_Strike_OpponentCantMovePast and str(event.get("extra_info", "")) == "":
+			# The opponent can't move past this player (not a buddy): BARRIER for the strike.
+			var bar_side := 0 if int(event["event_player"]) == int(Enums.PlayerId.PlayerId_Player) else 1
+			_strike_status[bar_side]["barrier"] = true
+			_show_status(bar_side, "barrier")
+		elif et == E.EventType_Strike_Critical:
+			# Season 3: the Critical cost is paid (or an effect made it Critical).
+			var crit_side := 0 if int(event["event_player"]) == int(Enums.PlayerId.PlayerId_Player) else 1
+			_strike_status[crit_side]["critical"] = true
+			_crit_card[crit_side] = int(event.get("number", -1))
+			_show_status(crit_side, "critical")
+			if strike_stage != null:
+				strike_stage.add_status_tag(crit_side == 0, "CRITICAL")
+		elif et == E.EventType_Strike_Infuse:
+			if strike_stage != null:
+				strike_stage.add_status_tag(int(event["event_player"]) == int(Enums.PlayerId.PlayerId_Player), "INFUSED")
 		elif et == E.EventType_Strike_StatusBadge or et == E.EventType_Strike_Stun_Immunity:
 			# Stun immunity, ignore armor, ignore guard: a badge for the rest of the strike.
 			var st_side := 0 if int(event["event_player"]) == int(Enums.PlayerId.PlayerId_Player) else 1
@@ -8557,6 +9286,9 @@ const STATUS_BADGES := {
 	"ignore_guard": "res://scenes/game/ignore_guard_badge.gd",
 	"ex": "res://scenes/game/ex_badge.gd",
 	"wild_swing": "res://scenes/game/wild_swing_badge.gd",
+	"grounded": "res://scenes/game/grounded_badge.gd",  # can't be pushed / pulled by the opponent
+	"barrier": "res://scenes/game/barrier_badge.gd",    # the opponent can't move past
+	"critical": "res://scenes/game/critical_badge.gd",  # Season 3: the strike is Critical
 }
 var _status_badges : Array = [{}, {}] # per side: kind -> badge
 
@@ -9349,6 +10081,11 @@ func _update_reveal_selection() -> void:
 # One list row: [count] [gauge icon] "Card name - Boost name", the whole row tappable.
 # Wraps a list row so its tap button also covers its share of the gap around it: a tap between
 # two rows picks the nearer row instead of falling through and closing the window.
+# List-window rows: tall enough to hit with a fingertip on a phone (they were 42).
+const REF_ROW_H := 52.0
+const REF_ROW_GAP_ABOVE := 7
+const REF_ROW_GAP_BELOW := 1
+
 func _gap_slot(cell : Control) -> PanelContainer:
 	var slot := PanelContainer.new()
 	slot.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
@@ -9358,8 +10095,10 @@ func _gap_slot(cell : Control) -> PanelContainer:
 	gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	gap.add_theme_constant_override("margin_left", 4)
 	gap.add_theme_constant_override("margin_right", 4)
-	gap.add_theme_constant_override("margin_top", 2)
-	gap.add_theme_constant_override("margin_bottom", 3)
+	# Most of the space between rows goes to the row below it: a finger lands a little higher
+	# than it aims, so a tap just above a row picks that row rather than the one above.
+	gap.add_theme_constant_override("margin_top", REF_ROW_GAP_ABOVE)
+	gap.add_theme_constant_override("margin_bottom", REF_ROW_GAP_BELOW)
 	slot.add_child(gap)
 	gap.add_child(cell)
 	for c in cell.get_children():
@@ -9370,7 +10109,7 @@ func _gap_slot(cell : Control) -> PanelContainer:
 
 func _make_ref_cell(card, count_text : String, cell_w : float, tap : Callable, hold : Callable) -> PanelContainer:
 	var cell := PanelContainer.new()
-	cell.custom_minimum_size = Vector2(cell_w, 42.0)
+	cell.custom_minimum_size = Vector2(cell_w, REF_ROW_H)
 	cell.add_theme_stylebox_override("panel", _ref_cell_style(false))
 	cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var inset := MarginContainer.new()
@@ -10202,7 +10941,7 @@ func show_popout_preview(card_id : int, src_override = null) -> bool:
 	popout_preview_root.add_child(card)
 	card.initialize_simple(card_id, src.card_url_loaded_image, src.card_url_loaded_cardback, src.card_attack_name, src.card_boost_name)
 	if src.badge_text != "":
-		card.set_badge(src.badge_text, src.badge_color, src.badge_s6)
+		card.set_badge(src.badge_text, src.badge_color, src.badge_s6, src.badge_s3)
 	card.flip_card_to_front(src.card_front.visible)
 	card.change_state(CardBase.CardState.CardState_InPopout)
 	card.set_card_and_focus(CardBase.phone_focus_center, 0, CardBase.phone_focus_scale)

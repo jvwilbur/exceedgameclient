@@ -227,11 +227,13 @@ var badge_text : String = ""
 var badge_color : Color = Color.WHITE
 
 var badge_s6 : bool = false
+var badge_s3 : bool = false
 
-func set_badge(text : String, color : Color, s6 : bool = false) -> void:
+func set_badge(text : String, color : Color, s6 : bool = false, s3 : bool = false) -> void:
 	badge_text = text
 	badge_color = color
 	badge_s6 = s6
+	badge_s3 = s3
 	if text != "":
 		var font : Font = load("res://scenes/game/badge_font.gd").make_font()
 		# Positions are in card-local pixels (origin = card centre).
@@ -253,6 +255,13 @@ func set_badge(text : String, color : Color, s6 : bool = false) -> void:
 			# Lower-right corner of the cost square, mirrored on the other side.
 			left_pos = Vector2(-70.0, -134.0)
 			right_pos = Vector2(70.0, -134.0)
+		if not is_ultra and s3:
+			# Season 3 specials print their name across the top: smaller markers, in the black
+			# space left of the name and mirrored on the right.
+			font_size = int(round(font_size * 0.6))
+			outline = 5
+			left_pos = Vector2(-110.0, -152.0)
+			right_pos = Vector2(110.0, -152.0)
 		for pair in [["BadgeLeft", left_pos],
 				["BadgeRight", right_pos]]:
 			var label := card_features.get_node_or_null(pair[0]) as Label

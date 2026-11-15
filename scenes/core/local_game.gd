@@ -3980,6 +3980,7 @@ func handle_strike_effect(card_id : int, effect, performing_player : Player):
 				create_event(Enums.EventType.EventType_Strike_StatusBadge, performing_player.my_id, 0, "ignore_guard")
 		StrikeEffects.IgnorePushAndPull:
 			performing_player.strike_stat_boosts.ignore_push_and_pull = true
+			create_event(Enums.EventType.EventType_Strike_StatusBadge, performing_player.my_id, 0, "grounded")
 		StrikeEffects.IgnorePushAndPullPassiveBonus:
 			performing_player.ignore_push_and_pull += 1
 			if performing_player.ignore_push_and_pull == 1:

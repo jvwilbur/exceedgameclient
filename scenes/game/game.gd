@@ -1865,7 +1865,7 @@ func create_card(id, card_def, image_url_index, cardback_url, parent, is_opponen
 	if phone_layout != null:
 		var badge : Dictionary = phone_layout.badge_for(card_def, is_opponent)
 		if not badge.is_empty():
-			new_card.set_badge(badge["text"], badge["color"], badge.get("s6", false))
+			new_card.set_badge(badge["text"], badge["color"], badge.get("s6", false), badge.get("s3", false))
 	new_card.raised_card.connect(on_card_raised)
 	new_card.lowered_card.connect(on_card_lowered)
 	new_card.clicked_card.connect(on_card_clicked)
@@ -4956,6 +4956,11 @@ func _handle_events(events):
 			if banner_delay > 0.0:
 				begin_delay(banner_delay, events.slice(event_index))
 				break
+			# Changing cards: the new cards are drawn only once the last changed card has
+			# finished its stop at the screen center.
+			if phone_layout.should_defer_draw(event):
+				begin_delay(0.01, events.slice(event_index))
+				break
 		match event['event_type']:
 			Enums.EventType.EventType_AddToGauge:
 				delay = _on_add_to_gauge(event)
@@ -5777,7 +5782,7 @@ func update_boost_summary(player_id, boosts_card_holder, boost_box):
 			multi_action_boost_shown = true
 			continue
 		# (The phone layout shows some boosts in their card's own wording.)
-		var printed_boost : String = phone_layout.boost_text_override(card.definition, true) if phone_layout != null else ""
+		var printed_boost : String = phone_layout.boost_text_override(card.definition, true, summary_side) if phone_layout != null else ""
 		if printed_boost != "":
 			printed_boost_lines.append(phone_layout.phrase_boost_text(printed_boost, str(card.definition['boost'].get('display_name', ""))))
 			continue

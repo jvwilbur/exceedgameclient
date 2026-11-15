@@ -179,8 +179,23 @@ func _show_action_banner_now(text : String, side : int, claim_mini : bool) -> vo
 	var m := _claim_mini() if claim_mini else null
 	if m != null:
 		_morph_to_banner(m, text, true, side)
+		_live_banners.append(m)
 	else:
-		_show_banner(text, side)
+		_live_banners.append(_show_banner(text, side))
+
+# Action banners on screen (shown, not yet gone: they free themselves once faded). Not the held
+# STRIKE banner.
+var _live_banners : Array = []
+
+# True while an action banner is still up or fading (PhoneLayout holds a strike's next events
+# until it has gone).
+func action_banner_showing() -> bool:
+	var keep : Array = []
+	for b in _live_banners:
+		if b != null and is_instance_valid(b) and not b.is_queued_for_deletion() and b != _banner:
+			keep.append(b)
+	_live_banners = keep
+	return not keep.is_empty()
 
 
 # Banner letters: [fill, outline]. A player's banner is lettered in that player's color (a light
@@ -198,12 +213,13 @@ func _color_banner_label(lab : Label, side : int) -> void:
 	lab.add_theme_color_override("font_color", cols[0])
 	lab.add_theme_color_override("font_outline_color", cols[1])
 
-func _show_banner(text : String = "STRIKE", side : int = -1) -> void:
+func _show_banner(text : String = "STRIKE", side : int = -1) -> Control:
 	var b := _make_banner(text, 1.0, side)
 	var t := b.create_tween()
 	t.tween_property(b, "position:x", 0.0, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	t.tween_interval(BANNER_HOLD)
 	t.tween_callback(func(): _leave_when_ready(b))
+	return b
 
 # After its hold, a banner stays up while a card is still on its way to the screen center under
 # it (a boost being played: PhoneLayout._fly_via_center), then fades out.
@@ -250,6 +266,7 @@ func card_set(card, is_player : bool, is_ex : bool, is_wild : bool) -> void:
 		_add_banner_tag(is_player, "EX")
 	if is_wild:
 		_add_banner_tag(is_player, "WILD SWING")
+	_add_pending_tags()
 
 # The opponent's strike card is face up (set face up, or turned up by an effect while the STRIKE
 # banner is held): the banner names it, "STRIKE (Gun Flame)".
@@ -292,6 +309,31 @@ func _unpark(card) -> void:
 	card.card_features.visible = true
 	card.focus_feature.get_node("Focus").mouse_filter = Control.MOUSE_FILTER_STOP
 
+const BOTTOM_TAGS := ["CRITICAL", "INFUSED"]
+
+# The strike is Critical / the player is Infused (PhoneLayout, from the game's events): a tag on
+# the bottom edge of the held STRIKE banner, over that player's side (while the banner is up).
+# (Infused just before striking, e.g. an infusion paid for the Strike action: the banner isn't up
+# yet, so the tag waits for it.)
+func add_status_tag(is_player : bool, kind : String) -> void:
+	if phone.catching_up():
+		return
+	if _banner == null or not is_instance_valid(_banner):
+		_pending_tags["%s|%s" % [is_player, kind]] = Time.get_ticks_msec()
+		return
+	_add_banner_tag(is_player, kind)
+
+var _pending_tags : Dictionary = {} # "is_player|kind" -> when (msec)
+const PENDING_TAG_MS := 6000
+
+func _add_pending_tags() -> void:
+	var now := Time.get_ticks_msec()
+	for key in _pending_tags.keys():
+		if now - int(_pending_tags[key]) < PENDING_TAG_MS:
+			var parts : PackedStringArray = str(key).split("|")
+			_add_banner_tag(parts[0] == "true", parts[1])
+	_pending_tags = {}
+
 func _add_banner_tag(is_player : bool, kind : String) -> void:
 	var key := "%s|%s" % [is_player, kind]
 	if _banner == null or not is_instance_valid(_banner) or _banner_tags.has(key):
@@ -301,8 +343,18 @@ func _add_banner_tag(is_player : bool, kind : String) -> void:
 	tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var sb := StyleBoxFlat.new()
 	var wild := kind == "WILD SWING"
+	var crit := kind == "CRITICAL"
+	# CRITICAL and INFUSED sit on the banner's bottom edge (EX / WILD SWING on its top edge).
+	var bottom := kind in BOTTOM_TAGS
 	sb.bg_color = Color(0.42, 0.12, 0.62) if wild else Color(0.85, 0.55, 0.05)
-	sb.border_color = Color(1, 1, 1)
+	if kind == "INFUSED":
+		sb.bg_color = Color(0.05, 0.55, 0.5)
+	if crit:
+		sb.bg_color = Color(0, 0, 0, 0) # (the fire panel below is its face, rim included)
+		sb.draw_center = false
+		sb.border_color = Color(0, 0, 0, 0)
+	else:
+		sb.border_color = Color(1, 1, 1)
 	sb.set_border_width_all(4)
 	sb.set_corner_radius_all(14)
 	sb.content_margin_left = 16
@@ -312,6 +364,13 @@ func _add_banner_tag(is_player : bool, kind : String) -> void:
 	sb.shadow_color = Color(0, 0, 0, 0.5)
 	sb.shadow_size = 6
 	tag.add_theme_stylebox_override("panel", sb)
+	if crit:
+		var fire = load("res://scenes/game/critical_fire_panel.gd").new()
+		tag.add_child(fire)
+		sb.content_margin_left = 14
+		sb.content_margin_right = 14
+		sb.content_margin_top = 4
+		sb.content_margin_bottom = 4
 	var lab := Label.new()
 	lab.text = kind
 	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -319,16 +378,21 @@ func _add_banner_tag(is_player : bool, kind : String) -> void:
 	fv.base_font = lab.get_theme_default_font()
 	fv.variation_embolden = 1.0
 	lab.add_theme_font_override("font", fv)
-	lab.add_theme_font_size_override("font_size", 34)
+	# (CRITICAL: a little smaller, so it sits snugly inside the fire panel's rim)
+	lab.add_theme_font_size_override("font_size", 28 if crit else 34)
 	lab.add_theme_color_override("font_color", Color(1, 1, 1))
-	lab.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	lab.add_theme_color_override("font_outline_color", Color(0.3, 0.02, 0.0) if crit else Color(0, 0, 0))
 	lab.add_theme_constant_override("outline_size", 8)
 	tag.add_child(lab)
 	_banner.add_child(tag)
 	tag.reset_size()
-	# Over that character's side, straddling the banner's top edge (clear of the big letters).
+	# Over that character's side, straddling the banner's top edge (clear of the big letters);
+	# CRITICAL / INFUSED straddle its bottom edge.
 	var cx : float = w * (0.25 if is_player else 0.75)
-	tag.position = Vector2(cx - tag.size.x / 2.0, -tag.size.y * 0.55)
+	if bottom:
+		tag.position = Vector2(cx - tag.size.x / 2.0, _banner.size.y - tag.size.y * 0.45)
+	else:
+		tag.position = Vector2(cx - tag.size.x / 2.0, -tag.size.y * 0.55)
 	tag.pivot_offset = tag.size / 2.0
 	tag.scale = Vector2(0.2, 0.2)
 	tag.create_tween().tween_property(tag, "scale", Vector2.ONE, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
@@ -391,6 +455,8 @@ func set_mini_banner(text : String, side : int = -1) -> void:
 	if text == "":
 		return
 	_mini = _make_banner(text, 0.5, side)
+	# (over a held STRIKE banner, e.g. the opponent's Reading forcing your response)
+	_mini.z_index = BANNER_Z + 1
 	_mini.position.x = (phone.W - _mini.size.x) / 2.0
 	_mini.modulate.a = 0.0
 	_mini.scale = Vector2(0.7, 0.7)

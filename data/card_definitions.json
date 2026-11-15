@@ -17043,6 +17043,7 @@
 						"effect_type": "sustain_this",
 						"card_name": "Ultimate Fortissimo"
 					},
+					"min_gauge": 2,
 					"gauge_max": 2
 				}
 			]
@@ -17782,7 +17783,7 @@
 			"boost_type": "continuous",
 			"force_cost": 0,
 			"cancel_cost": -1,
-			"display_name": "Atack Command",
+			"display_name": "Attack Command",
 			"effects": [
 				{
 					"timing": "during_strike",
@@ -37321,7 +37322,7 @@
 			"boost_type": "continuous",
 			"force_cost": 0,
 			"cancel_cost": 1,
-			"display_name": "Find your one way",
+			"display_name": "Find Your One Way",
 			"effects": [
 				{
 					"timing": "hit",
@@ -37364,7 +37365,7 @@
 			"boost_type": "continuous",
 			"force_cost": 0,
 			"cancel_cost": 1,
-			"display_name": "Flame of corruption",
+			"display_name": "Flame of Corruption",
 			"effects": [
 				{
 					"timing": "before",
@@ -37459,7 +37460,7 @@
 			"boost_type": "continuous",
 			"force_cost": 0,
 			"cancel_cost": 1,
-			"display_name": "Rock you",
+			"display_name": "Rock You",
 			"effects": [
 				{
 					"timing": "hit",
@@ -37554,7 +37555,7 @@
 			"boost_type": "continuous",
 			"force_cost": 0,
 			"cancel_cost": 1,
-			"display_name": "Keep yourself alive",
+			"display_name": "Keep Yourself Alive",
 			"effects": [
 				{
 					"timing": "during_strike",
@@ -37657,7 +37658,7 @@
 			"boost_type": "continuous",
 			"force_cost": 0,
 			"cancel_cost": 1,
-			"display_name": "Bandit revolver",
+			"display_name": "Bandit Revolver",
 			"effects": [
 				{
 					"timing": "now",
