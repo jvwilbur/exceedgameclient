@@ -111,12 +111,25 @@ func setup(game_node) -> void:
 	CardBase.phone_mode = true
 	CardBase.phone_anim_pace = ANIM_PACE
 	var win := get_window()
-	_saved_scale_size = win.content_scale_size
-	_saved_aspect = win.content_scale_aspect
+	var prev = _active
+	if is_instance_valid(prev) and prev != self and not prev._restored:
+		# The game scene is being rebuilt (a reconnect restores the match in a new scene before the
+		# old one is freed): take over from the old layout. Its saved window settings are the real
+		# ones (the window is already in phone mode), and it must not put them back when it goes,
+		# or it would undo this layout's (screen back to landscape, phone mode off).
+		_saved_scale_size = prev._saved_scale_size
+		_saved_aspect = prev._saved_aspect
+		_saved_orientation = prev._saved_orientation
+		prev._hand_over()
+	else:
+		_saved_scale_size = win.content_scale_size
+		_saved_aspect = win.content_scale_aspect
+		if OS.has_feature("mobile"):
+			_saved_orientation = DisplayServer.screen_get_orientation()
+	_active = self
 	# On a real phone, turn the screen to portrait while the phone UI is active, following the
 	# phone's rotation sensor (either way up; the layout itself is portrait only).
 	if OS.has_feature("mobile"):
-		_saved_orientation = DisplayServer.screen_get_orientation()
 		DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_PORTRAIT)
 	_configure_window()
 	win.size_changed.connect(_on_window_size_changed)
@@ -163,10 +176,22 @@ func strike_end() -> void:
 func _exit_tree() -> void:
 	restore()
 
+# The phone layout currently in charge of the window (its orientation, content scale, phone mode).
+static var _active = null
+
+# A newer layout has taken over (see setup): this one leaves the window as it is.
+func _hand_over() -> void:
+	_restored = true
+	var win := get_window()
+	if win != null and win.size_changed.is_connected(_on_window_size_changed):
+		win.size_changed.disconnect(_on_window_size_changed)
+
 func restore() -> void:
 	if _restored:
 		return
 	_restored = true
+	if _active == self:
+		_active = null
 	CardBase.phone_mode = false
 	CardBase.phone_anim_pace = 1.0
 	if OS.has_feature("mobile"):
@@ -2732,6 +2757,11 @@ func _cards_drawing() -> bool:
 # `then_cb`: called instead of the flight on to the area, once the card leaves the center (a card
 # going on into a hand: see fly_from_sealed_to_hand).
 func _fly_via_center(card, target_state, final_scale = null, is_player : bool = true, then_cb : Callable = Callable()) -> void:
+	if catching_up():
+		# (a reconnect replaying the match: straight to its area, no queue for the center)
+		if not then_cb.is_null():
+			then_cb.call()
+		return
 	var real_pos : Vector2 = card.target_pos
 	_banner_got_cards = true
 	# Wait in place, out of sight, for its turn.
@@ -2747,7 +2777,7 @@ func _fly_via_center(card, target_state, final_scale = null, is_player : bool = 
 # A card leaving a sealed area for a hand: it stops at the screen center (in focus) like a card
 # going to an area, then shrinks to hand size and goes on into the hand (`then_cb` puts it there).
 func fly_from_sealed_to_hand(card, is_player : bool, then_cb : Callable) -> void:
-	if not USE_CENTER_STOP_FLIGHTS or card == null or not is_instance_valid(card):
+	if not USE_CENTER_STOP_FLIGHTS or card == null or not is_instance_valid(card) or catching_up():
 		then_cb.call()
 		return
 	# (a flight to where it is, so it can wait its turn in the queue; no stop of its own)
@@ -2826,14 +2856,14 @@ func _start_center_flight(card, real_pos : Vector2, target_state, final_scale, i
 			card.target_scale = final_scale
 			card.resting_scale = final_scale)
 
-# A glow round a card in its player's color (red for you, blue for the opponent), using the card's
-# own highlight panel.
+# A glow round a card in its player's color (red for whoever went first, blue for the other),
+# using the card's own highlight panel.
 func _set_center_glow(card, on : bool, is_player : bool) -> void:
 	var bl = card.get_node_or_null("CardFocusFeatures/Backlight")
 	if bl == null:
 		return
 	if on:
-		var col : Color = GAUGE_COLORS[0 if is_player else 1]
+		var col : Color = _gauge_color(0 if is_player else 1)
 		var sb := StyleBoxFlat.new()
 		sb.bg_color = Color(col, 0.85)
 		sb.set_corner_radius_all(14)
@@ -3009,6 +3039,8 @@ func _on_card_zone_flight(card, from_zone, target_state) -> void:
 	if target_state == S.CardState_InGauge and from_zone in boosts:
 		card.finish_animation_immediately()
 		return
+	if catching_up():
+		return # (a reconnect replaying the match: every card flies straight to its area)
 	var striking = g.get_node_or_null("AllCards/Striking")
 	# Boosts cleared away as a strike resolves (just after it ends) leave like the strike cards:
 	# off the screen sideways, then straight into their areas (no stop at the center).
@@ -3497,11 +3529,60 @@ func _update_side_colors() -> void:
 	panels["opp_bar"].get_node("Metal").set_colors(ob[0], ob[1])
 	panels["stage_l"].add_theme_stylebox_override("panel", _style(red_stage if player_first else blue_stage))
 	panels["stage_r"].add_theme_stylebox_override("panel", _style(blue_stage if player_first else red_stage))
+	# The arena icons' borders, too (they are made red / blue before the sides are known).
+	var red_icon := Color(0.95, 0.25, 0.2)
+	var blue_icon := Color(0.25, 0.35, 1.0)
+	_set_icon_border(p1_icon, red_icon if player_first else blue_icon)
+	_set_icon_border(p2_icon, blue_icon if player_first else red_icon)
+	refresh_gauge() # (the "G" of an empty gauge is in its player's color)
+
+# Gives an arena icon its border colour (the exceeded border and glow follow it: _update_exceed_icons).
+func _set_icon_border(icon : TextureRect, col : Color) -> void:
+	if icon == null or not is_instance_valid(icon):
+		return
+	icon.set_meta("border_color", col)
+	var frame : Panel = icon.get_node_or_null("Frame")
+	if frame != null and not frame.get_meta("exceed_on", false):
+		frame.add_theme_stylebox_override("panel", _style(Color(0, 0, 0, 0), col, 4, 4))
+
+# ---- Catching up after a reconnect ---------------------------------------------------------------
+# A reconnect rebuilds the match by replaying its whole log with no delays (Game's restore
+# fast-forward). The phone staging runs on real-time tweens, timers and a one-card-at-a-time queue,
+# which can't keep up with that: left on, plates close over strikes that ended long ago and every
+# card of the match queues up for its stop at the center. So while the replay runs there are no
+# banners, no plates and no stops at the center (cards fly straight to their areas); once it has
+# caught up, a strike still in progress is staged as it would have been live.
+var _was_catching_up : bool = false
+
+func catching_up() -> bool:
+	return game != null and (game.restore_fast_forwarding or game.restore_fast_forward_pending)
+
+func _update_catch_up() -> void:
+	var now := catching_up()
+	if _was_catching_up and not now:
+		_after_catch_up()
+	_was_catching_up = now
+
+func _after_catch_up() -> void:
+	# (nothing should be left in the queue; if anything is, it goes straight on)
+	for e in _center_queue:
+		var c = e["card"]
+		if is_instance_valid(c):
+			c.remove_meta("phone_center_wait")
+			c.remove_meta("phone_center_hold")
+			c.card_features.visible = true
+			c.target_pos = e["pos"]
+	_center_queue.clear()
+	_event_hold_elapsed = 0.0
+	_change_hold_armed_at = -1.0
+	if strike_stage != null:
+		strike_stage.restage_after_catch_up()
 
 func _process(_delta : float) -> void:
 	if not _built or _restored:
 		return
 	_pace_tweens()
+	_update_catch_up()
 	_update_side_colors()
 	_place_modal()
 	_update_discard_icons()
@@ -4339,7 +4420,8 @@ func refresh_gauge() -> void:
 		var avail := W / 2.0 - 12.0
 		var gsz := minf(avail / slots - 3.0, gauge_h - 6.0)
 		var total := slots * (gsz + 3.0) - 3.0
-		var x0 := 6.0 if is_p else W - 6.0 - total
+		# Each strip starts at the center line and runs out toward its screen edge.
+		var x0 := W / 2.0 - 6.0 - total if is_p else W / 2.0 + 6.0
 		var y0 := gauge_y + (gauge_h - gsz) / 2.0
 		for i in range(slots):
 			var filled := i < cards.size()
@@ -4348,8 +4430,9 @@ func refresh_gauge() -> void:
 			slot.add_theme_stylebox_override("panel", _style(
 				Color(0.55, 0.85, 1.0) if filled else Color(0.30, 0.62, 0.85),
 				Color(0.85, 0.95, 1.0) if filled else Color(0.15, 0.35, 0.6), 2, 4))
-			# Your (red) gauge fills left to right; the opponent's (blue) one right to left.
-			var px : int = i if is_p else slots - 1 - i
+			# Both gauges fill from the center of the screen outward: yours (the left half) right
+			# to left, the opponent's (the right half) left to right.
+			var px : int = slots - 1 - i if is_p else i
 			slot.position = Vector2(x0 + px * (gsz + 3.0), y0)
 			slot.size = Vector2(gsz, gsz)
 			if filled and _gauge_prev_cards[side] >= 0 and i >= _gauge_prev_cards[side]:
@@ -4419,7 +4502,11 @@ func _gauge_card_in_focus_flight(c) -> bool:
 # An empty gauge shows a big calligraphic "G" in its first space, in its player's color with a black
 # border (the first gauge card covers it). Gauge cards send bolts of lightning along the strip
 # (see gauge_bolts.gd).
-const GAUGE_COLORS := [Color(0.95, 0.25, 0.2), Color(0.3, 0.45, 1.0)]
+const GAUGE_COLORS := [Color(0.95, 0.25, 0.2), Color(0.3, 0.45, 1.0)] # [red, blue]
+
+# A side's color (0 = you, 1 = the opponent): red for whoever went first, blue for the other.
+func _gauge_color(side : int) -> Color:
+	return GAUGE_COLORS[0 if (side == 0) == _player_first else 1]
 var _gauge_g_font : FontVariation = null
 var _gauge_bolts : Array = [null, null]
 var _gauge_prev_cards : Array = [-1, -1] # gauge size at the last refresh (new boxes grow in)
@@ -4444,7 +4531,7 @@ func _gauge_g_label(side : int, gsz : float) -> Control:
 	var k := fsize / 1000.0
 	var ink_center := (GAUGE_G_INK.position + GAUGE_G_INK.size / 2.0) * k
 	var baseline := Vector2(gsz, gsz) / 2.0 - ink_center
-	var col : Color = GAUGE_COLORS[side]
+	var col : Color = _gauge_color(side)
 	var font : Font = _gauge_g_font
 	c.draw.connect(func():
 		c.draw_string_outline(font, baseline, "G", HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, outline, Color.BLACK)
@@ -4481,7 +4568,7 @@ func _update_gauge_bolts(side : int, rects : Array, cards : int) -> void:
 		clip.position = area.position - Vector2(3, 0)
 		clip.size = area.size + Vector2(6, 0)
 		bolts.position = -clip.position
-	bolts.set_gauge(rects, cards, GAUGE_COLORS[side])
+	bolts.set_gauge(rects, cards, _gauge_color(side))
 
 # The card-type "moon" icon is in the top-left corner of every card image.
 func _moon_icon(card) -> Texture2D:
@@ -4816,18 +4903,28 @@ func _rounded_mat() -> ShaderMaterial:
 	if _rounded_card_mat == null:
 		_rounded_card_mat = ShaderMaterial.new()
 		_rounded_card_mat.shader = load("res://scenes/card/rounded_card.gdshader")
-		_rounded_card_mat.set_shader_parameter("radius", 0.06)
-		_rounded_card_mat.set_shader_parameter("aspect", CARD_H / CARD_W)
+		_rounded_card_mat.set_shader_parameter("radius", ROUNDED_CARD_RADIUS)
+		_rounded_card_mat.set_shader_parameter("size", Vector2(CARD_W, CARD_H))
 	return _rounded_card_mat
+
+# The corner radius, in card pixels (a card is 250 wide): about a playing card's.
+const ROUNDED_CARD_RADIUS := 15.0
+const ROUNDED_CARD_LAYERS : Array[String] = ["CardFocusFeatures/CardContainer/Background",
+		"CardFocusFeatures/CardContainer/CardFront/FancyCard",
+		"CardFocusFeatures/CardContainer/CardBack",
+		"CardFocusFeatures/CardContainer/SelectedBorder"]
 
 func _set_card_rounded(card, on : bool) -> void:
 	if not is_instance_valid(card) or bool(card.get_meta("phone_rounded", false)) == on:
 		return
 	card.set_meta("phone_rounded", on)
-	var mat : Material = _rounded_mat() if on else null
-	for path in ["CardFocusFeatures/CardContainer/Background",
-			"CardFocusFeatures/CardContainer/CardFront/FancyCard",
-			"CardFocusFeatures/CardContainer/CardBack"]:
+	var mat : ShaderMaterial = _rounded_mat() if on else null
+	if on:
+		# Every layer fills the card's container, so they all share its size (the same for every card).
+		var container := card.get_node_or_null("CardFocusFeatures/CardContainer") as Control
+		if container != null and container.size.x > 0.0 and container.size.y > 0.0:
+			mat.set_shader_parameter("size", container.size)
+	for path in ROUNDED_CARD_LAYERS:
 		var n := card.get_node_or_null(path) as CanvasItem
 		if n != null:
 			n.material = mat
@@ -6458,13 +6555,6 @@ func _update_confirm_banner(confirming : bool) -> void:
 	# (whose action it is: lettered in that player's color. Your own confirmations, unless it's a
 	# move of the opponent's.)
 	var word_side := 0
-	if not confirming and _waiting_on_online_opponent():
-		# Online, the opponent's decision: a small "WAITING..." banner (in their color) until it
-		# comes, its dots appearing one at a time and starting over (spaces hold the missing dots'
-		# places so the word stays put). (Not over an action banner or the held STRIKE banner.)
-		var dots := int(Time.get_ticks_msec() / int(WAIT_DOT_TIME * 1000.0)) % 4
-		word = "WAITING" + ".".repeat(dots) + " ".repeat(3 - dots)
-		word_side = 1
 	if confirming:
 		var g = game
 		if _confirm_re == null:
@@ -6539,25 +6629,6 @@ func _update_confirm_banner(confirming : bool) -> void:
 			# options, cards to pick for it...).
 			word = "SELECT"
 	strike_stage.set_mini_banner(word, word_side)
-
-# An online match (not against the AI, not watching) whose next decision is the opponent's.
-# (Shown once the wait has lasted WAIT_BANNER_DELAY, so it doesn't flicker between the opponent's
-# quick back-to-back decisions.)
-const WAIT_BANNER_DELAY := 0.6
-const WAIT_DOT_TIME := 0.4 # (seconds per dot)
-var _waiting_since : float = -1.0
-
-func _waiting_on_online_opponent() -> bool:
-	var g = game
-	var waiting : bool = not g.observer_mode and g.game_wrapper != null and not g.game_wrapper.is_ai_game() \
-			and g.ui_state == g.UIState.UIState_WaitingOnOpponent \
-			and not action_banner_up and not (strike_stage != null and strike_stage.strike_banner_held())
-	if not waiting:
-		_waiting_since = -1.0
-		return false
-	if _waiting_since < 0.0:
-		_waiting_since = _now_s()
-	return _now_s() - _waiting_since >= WAIT_BANNER_DELAY
 
 # One of your character actions' names ("Character Action" when it has none), as the game puts it
 # in its "Are you sure you want to ...?" confirmation.

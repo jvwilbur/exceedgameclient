@@ -63,6 +63,14 @@ func _is_player_card(card) -> bool:
 # Called when both strike cards are set. Returns how long the event should take (seconds).
 func play_reveal() -> float:
 	var cards : Array = _striking().get_children()
+	if phone.catching_up():
+		# A reconnect replaying the match at full speed: the staging (banner, plate, flips) runs on
+		# real-time tweens that would fire long after the replay has moved on (a plate closing over
+		# a strike that has already ended), so the cards are just turned face up.
+		for c in cards:
+			if not c.is_front_showing():
+				game.make_card_revealed(c)
+		return 0.0
 	if _pending_open:
 		_do_open() # a new strike while the last plate is still waiting to open
 	if _active:
@@ -103,6 +111,27 @@ func play_reveal() -> float:
 	# (the revealed cards sit a moment before the strike goes on)
 	return pre + SLIDE_IN + 0.15 + 0.4 + REVEAL_SIT
 
+# The replay after a reconnect has caught up (PhoneLayout._after_catch_up) and a strike is still in
+# progress: it is staged now, as it would be had it been played live. With cards from both players
+# set, the plate closes over them (it opens by itself for a choice: _process); with only the first
+# card set, it waits out of sight under the held STRIKE banner.
+func restage_after_catch_up() -> void:
+	var cards : Array = _striking().get_children()
+	if cards.is_empty() or _active:
+		return
+	var mine := false
+	var theirs := false
+	for c in cards:
+		if _is_player_card(c):
+			mine = true
+		else:
+			theirs = true
+	if mine and theirs:
+		play_reveal()
+	else:
+		for c in cards:
+			card_set(c, _is_player_card(c), false, false)
+
 # How long the just-revealed strike cards sit before the strike's effects start.
 const REVEAL_SIT := 0.35
 
@@ -138,6 +167,8 @@ func _set_discard_z(z : int) -> void:
 # `side`: the player the banner is about (0 you, 1 the opponent): its letters are in that player's
 # color. -1: neither (the gold letters).
 func show_action_banner(text : String, side : int = -1) -> float:
+	if phone.catching_up():
+		return 0.0 # (a reconnect replaying the match: no banners, no waiting)
 	# (shown right away, even over another banner: banners don't wait their turn)
 	_show_action_banner_now(text, side, true)
 	return BANNER_TOTAL
@@ -200,6 +231,8 @@ var _banner_tags : Dictionary = {} # "side|kind" -> tag node
 func card_set(card, is_player : bool, is_ex : bool, is_wild : bool) -> void:
 	if _active:
 		return # (mid-strike: a replacement wild swing etc. is handled by the staged strike)
+	if phone.catching_up():
+		return # (a reconnect replaying the match: strikes aren't staged, see restage_after_catch_up)
 	park_card(card)
 	if _banner == null or not is_instance_valid(_banner):
 		_banner_tags = {}
@@ -320,6 +353,8 @@ var _mini_side : int = -1
 
 # `side`: the player the action is about (its letters in their color), as for show_action_banner.
 func set_mini_banner(text : String, side : int = -1) -> void:
+	if text != "" and phone.catching_up():
+		text = "" # (a reconnect replaying the match: no mini banners either; one already up goes)
 	if text == _mini_text and (text == "" or side == _mini_side):
 		return
 	if text != "" and _mini_text != "" and _mini != null and is_instance_valid(_mini):
@@ -330,8 +365,6 @@ func set_mini_banner(text : String, side : int = -1) -> void:
 		if lab != null:
 			lab.text = text
 			_color_banner_label(lab, side)
-		if text.begins_with("WAITING"):
-			return # (just its dots moving on: no pop)
 		_mini.scale = Vector2(1.08, 1.08)
 		_mini.create_tween().tween_property(_mini, "scale", Vector2.ONE, 0.15)
 		return
