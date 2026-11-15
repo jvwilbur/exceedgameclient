@@ -3421,6 +3421,22 @@ func update_dynamic_during_strike_effects():
 			_update_dynamic_character_strike_effect(effect, "char_ability|%d" % ability_index, true)
 		ability_index += 1
 
+# A dynamic effect's stat change, applied (+1) or taken back (-1): an event for the UI (the stat
+# gems), as a once-applied effect gets. Not for other kinds of effect.
+func _dynamic_stat_event(effect, direction : int) -> void:
+	match str(effect.get("effect_type", "")):
+		StrikeEffects.Powerup:
+			parent.create_event(Enums.EventType.EventType_Strike_PowerUp, my_id, resolve_effect_amount(effect) * direction)
+		StrikeEffects.Speedup:
+			parent.create_event(Enums.EventType.EventType_Strike_SpeedUp, my_id, resolve_effect_amount(effect) * direction)
+		StrikeEffects.Armorup:
+			parent.create_event(Enums.EventType.EventType_Strike_ArmorUp, my_id, resolve_effect_amount(effect) * direction)
+		StrikeEffects.Guardup:
+			parent.create_event(Enums.EventType.EventType_Strike_GuardUp, my_id, resolve_effect_amount(effect) * direction)
+		StrikeEffects.Rangeup:
+			parent.create_event(Enums.EventType.EventType_Strike_RangeUp, my_id, resolve_effect_amount(effect) * direction,
+					"", resolve_effect_amount(effect, "amount2") * direction)
+
 func _update_dynamic_character_strike_effect(effect, path : String, parent_condition_met : bool):
 	var should_be_active = parent_condition_met and parent.is_effect_condition_met(self, effect, null)
 	var key = path
@@ -3428,9 +3444,11 @@ func _update_dynamic_character_strike_effect(effect, path : String, parent_condi
 	if should_be_active and not is_active:
 		_apply_strike_bonus_effect(effect, -1)
 		active_dynamic_strike_effects[key] = effect
+		_dynamic_stat_event(effect, 1)
 	elif is_active and not should_be_active:
 		_revert_strike_bonus_effect(effect, -1, false)
 		active_dynamic_strike_effects.erase(key)
+		_dynamic_stat_event(effect, -1)
 
 	if 'and' in effect:
 		_update_dynamic_character_strike_effect(effect['and'], path + ".and", should_be_active)
@@ -3443,11 +3461,13 @@ func _update_dynamic_strike_effect(card : GameCard, effect, path : String, paren
 	if should_be_active and not is_active:
 		_apply_strike_bonus_effect(effect, card.id)
 		active_dynamic_strike_effects[key] = effect
+		_dynamic_stat_event(effect, 1)
 		parent._append_log_full(Enums.LogType.LogType_Effect, self,
 			"gains the effects of %s." % parent._get_boost_and_card_name(card))
 	elif is_active and not should_be_active:
 		_revert_strike_bonus_effect(effect, card.id, false)
 		active_dynamic_strike_effects.erase(key)
+		_dynamic_stat_event(effect, -1)
 		parent._append_log_full(Enums.LogType.LogType_Effect, self,
 			"no longer has the effects of %s." % parent._get_boost_and_card_name(card))
 

@@ -228,12 +228,14 @@ var badge_color : Color = Color.WHITE
 
 var badge_s6 : bool = false
 var badge_s3 : bool = false
+var badge_s1 : bool = false
 
-func set_badge(text : String, color : Color, s6 : bool = false, s3 : bool = false) -> void:
+func set_badge(text : String, color : Color, s6 : bool = false, s3 : bool = false, s1 : bool = false) -> void:
 	badge_text = text
 	badge_color = color
 	badge_s6 = s6
 	badge_s3 = s3
+	badge_s1 = s1
 	if text != "":
 		var font : Font = load("res://scenes/game/badge_font.gd").make_font()
 		# Positions are in card-local pixels (origin = card centre).
@@ -262,6 +264,12 @@ func set_badge(text : String, color : Color, s6 : bool = false, s3 : bool = fals
 			outline = 5
 			left_pos = Vector2(-110.0, -152.0)
 			right_pos = Vector2(110.0, -152.0)
+		elif not is_ultra and s1:
+			# Season 1 specials: smaller markers, tucked into the very top corners, clear of the name.
+			font_size = int(round(font_size * 0.6))
+			outline = 5
+			left_pos = Vector2(-108.0, -158.0)
+			right_pos = Vector2(108.0, -158.0)
 		for pair in [["BadgeLeft", left_pos],
 				["BadgeRight", right_pos]]:
 			var label := card_features.get_node_or_null(pair[0]) as Label
@@ -393,6 +401,7 @@ func _physics_process(delta):
 				set_card_and_focus(lerp_pos, lerp_rot, lerp_sca)
 			else:
 				set_card_and_focus(target_pos, target_rotation, original_scale)
+				_end_hand_flight()
 				change_state(CardState.CardState_InHand)
 		CardState.CardState_Discarding:
 			if animation_time <= 1:
@@ -459,6 +468,16 @@ func _end_focus_raise() -> void:
 		_raise_hand_for_anim(false)
 		if phone_mode and z_as_relative and z_index == 0:
 			z_index = 14
+
+# Phone: a card that was on its way to a zone (raised over everything, e.g. a strike card sent
+# back to the hand) and ends up in a hand instead: back to the hand's drawing order, so it never
+# stays over the reference windows.
+func _end_hand_flight() -> void:
+	if has_meta("phone_center_hold"):
+		return
+	if not z_as_relative and z_index == PHONE_ZONE_FLIGHT_Z:
+		z_as_relative = true
+		z_index = 0
 
 # Phone: back to its normal drawing order once it has landed.
 func _end_zone_flight() -> void:
@@ -623,6 +642,7 @@ func finish_animation_immediately():
 			if not manual_flip_needed and not skip_flip_when_drawing:
 				flip_card_to_front(true)
 			set_card_and_focus(target_pos, target_rotation, original_scale)
+			_end_hand_flight()
 			change_state(CardState.CardState_InHand)
 		CardState.CardState_Discarding:
 			set_card_and_focus(target_pos, target_rotation, target_scale)

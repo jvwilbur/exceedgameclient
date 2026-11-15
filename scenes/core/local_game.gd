@@ -2597,7 +2597,8 @@ func handle_strike_effect(card_id : int, effect, performing_player : Player):
 			for boost in performing_player.continuous_boosts:
 				power_counter_amount += boost.get_meta('bonus_move_power_counters', 0)
 			if power_counter_amount > 0:
-				create_event(Enums.EventType.EventType_Strike_PowerUp, performing_player.my_id, power_counter_amount)
+				# ("move_counters": the phone layout's gems follow the counters live instead)
+				create_event(Enums.EventType.EventType_Strike_PowerUp, performing_player.my_id, power_counter_amount, "move_counters")
 		StrikeEffects.ArmorupBonusMoveArmorCounters:
 			# Armor from card-level move counters is calculated dynamically in get_total_armor.
 			# This effect only creates the event for UI feedback.
@@ -2605,7 +2606,7 @@ func handle_strike_effect(card_id : int, effect, performing_player : Player):
 			for boost in performing_player.continuous_boosts:
 				move_armor_counter_amount += boost.get_meta('bonus_move_armor_counters', 0)
 			if move_armor_counter_amount > 0:
-				create_event(Enums.EventType.EventType_Strike_ArmorUp, performing_player.my_id, move_armor_counter_amount)
+				create_event(Enums.EventType.EventType_Strike_ArmorUp, performing_player.my_id, move_armor_counter_amount, "move_counters")
 		StrikeEffects.IncrementBonusMovePowerCounters, StrikeEffects.IncrementBonusMoveArmorCounters:
 			# Counters accumulate during actual movement (see AdvanceInternal / Close / Retreat / MoveToSpace).
 			# This effect is a no-op when invoked directly; it exists so the boost is recognized as active.
@@ -2660,13 +2661,17 @@ func handle_strike_effect(card_id : int, effect, performing_player : Player):
 		StrikeEffects.RemoveBlockOpponentMove:
 			_append_log_full(Enums.LogType.LogType_Effect, opposing_player, "is no longer prevented from moving.")
 			opposing_player.cannot_move = false
+			# (the phone layout's ROOTED badge comes off)
+			create_event(Enums.EventType.EventType_Strike_StatusBadge, opposing_player.my_id, 0, "unrooted")
 		StrikeEffects.BlockOpponentAdvanceClose:
 			_append_log_full(Enums.LogType.LogType_Effect, opposing_player, "cannot advance or close.")
 			opposing_player.cannot_advance_or_close = true
-			create_event(Enums.EventType.EventType_BlockMovement, opposing_player.my_id, card_id)
+			# ("advance_close": the ROOTED badge shows which way they can't go)
+			create_event(Enums.EventType.EventType_BlockMovement, opposing_player.my_id, card_id, "advance_close")
 		StrikeEffects.RemoveBlockOpponentAdvanceClose:
 			_append_log_full(Enums.LogType.LogType_Effect, opposing_player, "can advance and close again.")
 			opposing_player.cannot_advance_or_close = false
+			create_event(Enums.EventType.EventType_Strike_StatusBadge, opposing_player.my_id, 0, "unrooted")
 		StrikeEffects.BonusAction:
 			# You cannot take bonus actions during a strike.
 			if not active_strike:
@@ -4718,6 +4723,8 @@ func handle_strike_effect(card_id : int, effect, performing_player : Player):
 		StrikeEffects.OpponentCantMoveIfInRange:
 			opposing_player.strike_stat_boosts.cannot_move_if_in_opponents_range = true
 			_append_log_full(Enums.LogType.LogType_Effect, opposing_player, "is prevented from moving while in %s's range." % performing_player.name)
+			# ("in_range": the phone layout's ROOTED badge, for the rest of the strike)
+			create_event(Enums.EventType.EventType_BlockMovement, opposing_player.my_id, card_id, "in_range")
 		StrikeEffects.OpponentCantMovePast:
 			opposing_player.cannot_move_past_opponent = true
 			create_event(Enums.EventType.EventType_Strike_OpponentCantMovePast, performing_player.my_id, 0)

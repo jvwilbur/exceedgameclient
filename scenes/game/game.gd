@@ -1865,7 +1865,7 @@ func create_card(id, card_def, image_url_index, cardback_url, parent, is_opponen
 	if phone_layout != null:
 		var badge : Dictionary = phone_layout.badge_for(card_def, is_opponent)
 		if not badge.is_empty():
-			new_card.set_badge(badge["text"], badge["color"], badge.get("s6", false), badge.get("s3", false))
+			new_card.set_badge(badge["text"], badge["color"], badge.get("s6", false), badge.get("s3", false), badge.get("s1", false))
 	new_card.raised_card.connect(on_card_raised)
 	new_card.lowered_card.connect(on_card_lowered)
 	new_card.clicked_card.connect(on_card_clicked)
@@ -2510,6 +2510,9 @@ func _stat_notice_event(event):
 			Enums.EventType.EventType_Strike_RangeUp]:
 		# (no floating text to read: just long enough for the gem to start rolling, so a strike
 		# with a few boosts in play doesn't sit idle a second per stat change)
+		return PhoneGemStatDelay
+	# Phone layout: a blocked move shows as the ROOTED badge instead of floating text.
+	if phone_layout != null and event['event_type'] == Enums.EventType.EventType_BlockMovement:
 		return PhoneGemStatDelay
 	spawn_damage_popup(notice_text, player)
 	return SmallNoticeDelay

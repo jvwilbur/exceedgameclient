@@ -1968,7 +1968,7 @@ func _character_action_available() -> bool:
 # times as a reminder, with any other strike
 # bonuses listed under it. Add a character's deck id to do the same for another.
 const PERMANENT_BONUS_CHARACTERS := ["testament", "nago", "happychaos", "millia", "zato", "chipp", "axl", "leo", "anji",
-		"zangief", "akuma", "cammy", "dan"]
+		"zangief", "akuma", "cammy", "dan", "superskullman", "vincent"]
 # Characters whose ability only works on their own turn (Giovanna: only a strike she starts): the
 # box shows it during that character's turns only, for either player.
 const TURN_BONUS_CHARACTERS := ["giovanna", "potemkin", "may", "ramlethal", "sagat", "chunli", "guile", "cviper", "vega"]
@@ -2069,6 +2069,27 @@ const PRINTED_ABILITY_TEXT := {
 		"Your Special and Ultra attacks have \"[b]SET, Edge:[/b] +2 Power\"",
 		"Your Special and Ultra attacks have \"[b]SET, Edge:[/b] +3 Power, +1 Speed\"",
 	],
+	# ---- Season 1 ----
+	"morathi": [
+		"Before setting a Wild Swing, look at the top card of your deck. You may draw it and Wild Swing",
+		"Before setting a Wild Swing, look at the top 3 cards of your deck. Select one to draw, one to discard, and one to Wild Swing",
+	],
+	"nehtali": [
+		"[b]ACTION:[/b] Both players add the top discard to Gauge",
+		"[b]ACTION:[/b] You add the top 2 discard to Gauge. The opponent adds 1",
+	],
+	"ulrik": [
+		"[b]ACTION:[/b] Close or Retreat 1, Strike",
+		"[b]ACTION:[/b] Close or Retreat 2, Strike",
+	],
+	"superskullman": [
+		"Your Wild Swings have +1 Power",
+		"Your Wild Swings have +2 Power, +3 Guard",
+	],
+	"vincent": [
+		"[b]SET:[/b] Spend up to 3 Force for +2 Guard each",
+		"[b]SET:[/b] Spend up to 3 Force for +1 Armor, +2 Guard each",
+	],
 }
 # The wording printed on the character card, [front side, exceeded side]. Characters without an
 # entry use the ability text that the game generates.
@@ -2157,6 +2178,15 @@ const PERMANENT_BONUS_TEXT := {
 	"vega": [
 		"Your Specials and Ultras have +2 Power",
 		"Your Specials and Ultras have +3 Power, +1 Speed",
+	],
+	# ---- Season 1 ----
+	"superskullman": [
+		"Your Wild Swings have +1 Power",
+		"Your Wild Swings have +2 Power, +3 Guard",
+	],
+	"vincent": [
+		"SET: Spend up to 3 Force for +2 Guard each",
+		"SET: Spend up to 3 Force for +1 Armor, +2 Guard each",
 	],
 }
 # The game's own strike-bonus lines that a character's always-shown line already covers.
@@ -4007,6 +4037,10 @@ func _process(_delta : float) -> void:
 	_update_bonus_preview()
 	_update_multi_action_box()
 	_update_hidden_boosts()
+	_sweep_card_z(_delta)
+	# (the stock "Show Decision Popout" button: tapping your deck shows the top cards instead)
+	if game.choice_popout_button.visible and _topdeck_picking():
+		game.choice_popout_button.visible = false
 	_update_boost_layout()
 	if game.action_menu_container.visible:
 		_place_action_menu()
@@ -6175,6 +6209,11 @@ func _wire_phone_controls() -> void:
 	# your top card is known, else your deck reference. A long press: always the deck reference.
 	var open_my_ref := func(): _toggle_popout(T.CardPopoutType_ReferencePlayer, g._on_player_reference_button_pressed)
 	_wire_tap_hold(panels["deck_btn_p"], func():
+		# Choosing from the top cards of your deck (Morathi's Exceed...): they show in the revealed
+		# cards window.
+		if _topdeck_picking():
+			_toggle_popout(T.CardPopoutType_ChoiceZone, g._on_choice_popout_show_button_pressed)
+			return
 		# Choosing a strike card: the wild swing is picked (any picked cards let go) and waits for
 		# the island's O, like a picked card does.
 		if _is_strike_pick():
@@ -6478,6 +6517,7 @@ func _build_badge_map(deck : Dictionary) -> Dictionary:
 			"text": ROMAN[i] if i < ROMAN.size() else str(i + 1),
 			"color": SPECIAL_COLORS[i % SPECIAL_COLORS.size()],
 			"s3": int(float(str(deck.get("season", 0)))) == 3,
+			"s1": int(float(str(deck.get("season", 0)))) == 1,
 		}
 	for i in range(ultras.size()):
 		result[ultras[i][1]] = {
@@ -7304,6 +7344,49 @@ func boost_card_arriving() -> bool:
 			return true
 	return false
 
+# ---- Drawing order safety net ---------------------------------------------------------------
+# Cards are raised over everything while they fly (to a zone, to the screen center) and while a
+# hand card grows / shrinks. A card that has come to rest (in a hand, gauge, deck, discard pile or
+# boost area) is put back in its zone's drawing order if it was left raised, so it can never sit
+# over the reference windows (z 30). Checked a few times a second.
+var _z_sweep_t : float = 0.0
+const RESTING_STATES := [CardBase.CardState.CardState_InHand, CardBase.CardState.CardState_InGauge,
+		CardBase.CardState.CardState_InDeck, CardBase.CardState.CardState_Discarded, CardBase.CardState.CardState_InBoost]
+const MOVING_STATES := [CardBase.CardState.CardState_Focusing, CardBase.CardState.CardState_Unfocusing,
+		CardBase.CardState.CardState_DrawingToHand]
+
+func _sweep_card_z(delta : float) -> void:
+	_z_sweep_t += delta
+	if _z_sweep_t < 0.4:
+		return
+	_z_sweep_t = 0.0
+	var all_cards = game.get_node_or_null("AllCards")
+	if all_cards == null:
+		return
+	for zone in all_cards.get_children():
+		if not zone is Node2D:
+			continue
+		var any_moving := false
+		for c in zone.get_children():
+			if not c is CardBase:
+				continue
+			if c.state in MOVING_STATES:
+				any_moving = true
+			if c.z_as_relative or not (c.state in RESTING_STATES):
+				continue
+			if c.has_meta("phone_center_hold") or c.has_meta("phone_center_wait"):
+				continue
+			if c.z_index == CardBase.PHONE_ZONE_FLIGHT_Z or c.z_index == CENTER_STOP_Z or c.z_index == CardBase.PHONE_UNFOCUS_Z:
+				c.z_as_relative = true
+				c.z_index = 0
+		# (a hand left raised for a grow / shrink animation that is over)
+		if not any_moving and int(zone.get_meta("phone_anim_raise", 0)) > 0 and zone.has_meta("phone_raise_orig"):
+			var orig : Array = zone.get_meta("phone_raise_orig")
+			zone.z_as_relative = orig[0]
+			zone.z_index = orig[1]
+			zone.remove_meta("phone_raise_orig")
+			zone.set_meta("phone_anim_raise", 0)
+
 # ---- Boosts being played: not shown over the characters -----------------------------------
 # The boosted card is kept out of sight while it is played; an instant (immediate) boost's text
 # shows at the top of its player's boost window until it has resolved.
@@ -7562,7 +7645,9 @@ func _track_stat_gems(event) -> void:
 		E.EventType_Strike_ArmorUp: stat = "Armor"
 		E.EventType_Strike_GuardUp: stat = "Guard"
 		E.EventType_Strike_RangeUp: stat = "Range"
-	if stat == "" or str(event.get("reason", "")) == "powerup_per_sealed_amount":
+	if et == E.EventType_Move:
+		_update_gem_values() # (move counters: Thunderclap, Static Charge)
+	if stat == "" or str(event.get("reason", "")) in ["powerup_per_sealed_amount", "move_counters"]:
 		return
 	var pid := int(event["event_player"])
 	if pid != int(Enums.PlayerId.PlayerId_Player) and pid != int(Enums.PlayerId.PlayerId_Opponent):
@@ -7730,6 +7815,10 @@ func _update_gem_values() -> void:
 			var strike_shown : bool = _gem_strike and _strike_revealed
 			if strike_shown and _strike_stats[side].has(stat):
 				v = _strike_stats[side][stat]
+				# (plus the boosts' move counters, which follow every move: _move_counter_stats)
+				var mc : Dictionary = _move_counter_stats(side)
+				if mc.has(stat):
+					v = [int(v[0]) + int(mc[stat][0]), int(v[1]) + int(mc[stat][1])]
 			elif not _boost_stat_total(side, stat).is_empty():
 				v = _boost_stat_total(side, stat) # (the opponent's boosts' changes too)
 			# An EX attack (EX strike, or a boost like Badass! making it EX): +1 to all but Range.
@@ -7899,6 +7988,7 @@ const PRINTED_BOOST_AREA_TEXT := {
 	"Drunkard Shade": "At the start of your turn, add this to your Gauge.",
 	# Season 3: its Power follows the gauge (shown in the Power gem, see _linked_boost_stats).
 	"Psycho Power": "Psycho Power: [b][color=#ff4b4b]Gauge Link[/color][/b]",
+	"Charging Power": "Charging Power: [b][color=#ff4b4b]Gauge Link[/color][/b]",
 	"Die One Thousand Deaths!": "[b][color=#ff4b4b]Power x2[/color][/b]",
 	# ({attack}: the attack it would return, once known: see boost_text_override)
 	"Repeating Attack": "[b]AFTER:[/b] If you hit, recur {attack} and add Repeating Attack to Gauge",
@@ -7930,9 +8020,23 @@ const PRINTED_BOOST_AREA_TEXT := {
 	"Break the law": "[b]After:[/b] Advance or Retreat 1-2",
 	"Feel a Fear": "[b]Hit:[/b] If the opponent is between you and Eddie, +3 Power",
 	"Rock You": "[b]Hit:[/b] +1 Power, draw 1\n[b]After:[/b] If the opponent is stunned, gain Advantage",
+	# ---- Season 1: cleaned-up wording ----
+	"Lightning Strikes Twice": "[b]After:[/b] Recur {attack}",
+	"Burning Justice": "Instead of taking damage, discard twice that many cards from the top of your deck",
+	"I'm Sure I'll Hit Something": "If you Wild Swing, +2 Power, +1 Speed",
+	"Fear Not, Citizen!": "+3 Armor, +3 Guard\nIf the opponent moves past you, discard Fear Not, Citizen!",
+	"Overcharge": "[b]Hit:[/b] Spend up to 3 Gauge: +2 Power for each",
+	"Speed Force": "[b]Speed Force[/b]\n+2 Speed",
+	"Static Charge": "+1 Armor for each space you've moved",
 	# Faust's items affect both players (shown in both players' boost boxes, see below).
 	"Banana Peel/Donut": "[b]Before:[/b] Advance 1\n[b]After:[/b] Discard Donut",
 	"Bomb/Meteors": "Take 3 non-lethal damage. Discard Meteors",
+}
+
+# The same, by card id, for boost names that more than one card uses (Thunderclap: Ulrik's and
+# Luciya's). Checked first.
+const PRINTED_BOOST_AREA_TEXT_BY_ID := {
+	"ulrik_secondstrike": "+1 Power for each space you've moved",
 }
 
 # A continuous boost whose effects apply to both players (Faust's Donut, Meteors...): its text is
@@ -7963,6 +8067,8 @@ func shared_boost_lines(side : int) -> Array:
 func boost_text_override(card_def : Dictionary, for_boost_area : bool = false, side : int = -1) -> String:
 	var boost = card_def.get("boost", {})
 	var bname := str(boost.get("display_name", ""))
+	if for_boost_area and PRINTED_BOOST_AREA_TEXT_BY_ID.has(str(card_def.get("id", ""))):
+		return str(PRINTED_BOOST_AREA_TEXT_BY_ID[str(card_def.get("id", ""))]).replace("{attack}", _strike_card_name(side))
 	if for_boost_area and PRINTED_BOOST_AREA_TEXT.has(bname):
 		return str(PRINTED_BOOST_AREA_TEXT[bname]).replace("{attack}", _strike_card_name(side))
 	return str(PRINTED_BOOST_TEXT.get(bname, ""))
@@ -8170,6 +8276,10 @@ func _linked_boost_stats(side : int) -> Dictionary:
 				out["Power"] = [int(cur[0]) + amt, int(cur[1]) + amt]
 			elif str(e.get("condition", "")) == "total_powerup_greater_or_equal" and _is_plain_stat_effect_ignoring_condition(e):
 				conditional.append(e)
+	for stat in _move_counter_stats(side):
+		var mc : Array = _move_counter_stats(side)[stat]
+		var cur3 : Array = out.get(stat, [0, 0])
+		out[stat] = [int(cur3[0]) + int(mc[0]), int(cur3[1]) + int(mc[1])]
 	if not conditional.is_empty():
 		# (the Power the boosts give: the fixed ones and the gauge-linked ones, positive only)
 		var power := 0
@@ -8182,6 +8292,35 @@ func _linked_boost_stats(side : int) -> Dictionary:
 				var amt2 := int(e.get("amount", 0))
 				var cur2 : Array = out.get(stat, [0, 0])
 				out[stat] = [int(cur2[0]) + amt2, int(cur2[1]) + amt2]
+	return out
+
+# Boosts that count the spaces their player moves (Ulrik's Thunderclap: Power, Static Charge:
+# Armor): their bonus now, from the counters the game keeps on the boost cards.
+func _move_counter_stats(side : int) -> Dictionary:
+	var out := {}
+	var ids : Array = _boost_card_ids[side]
+	if ids.is_empty() or game.game_wrapper == null or game.game_wrapper.current_game == null:
+		return out
+	var db = game.game_wrapper.get_card_database()
+	for id in ids:
+		var lc = db.get_card(id)
+		if lc == null:
+			continue
+		for e in lc.definition.get("boost", {}).get("effects", []):
+			if not (e is Dictionary):
+				continue
+			var et := str(e.get("effect_type", ""))
+			var stat := ""
+			var n := 0
+			if et == "powerup_bonus_move_power_counters":
+				stat = "Power"
+				n = int(lc.get_meta("bonus_move_power_counters", 0))
+			elif et == "armorup_bonus_move_armor_counters":
+				stat = "Armor"
+				n = int(lc.get_meta("bonus_move_armor_counters", 0))
+			if stat != "" and n != 0:
+				var cur : Array = out.get(stat, [0, 0])
+				out[stat] = [int(cur[0]) + n, int(cur[1]) + n]
 	return out
 
 func _is_plain_stat_effect_ignoring_condition(e : Dictionary) -> bool:
@@ -8416,6 +8555,13 @@ func on_game_event(event) -> float:
 		elif et == E.EventType_Strike_Infuse:
 			if strike_stage != null:
 				strike_stage.add_status_tag(int(event["event_player"]) == int(Enums.PlayerId.PlayerId_Player), "INFUSED")
+		elif et == E.EventType_BlockMovement:
+			# Can't move (a Wolf Trap, Halberdier...): ROOTED, until the effect ends.
+			var root_side := 0 if int(event["event_player"]) == int(Enums.PlayerId.PlayerId_Player) else 1
+			_set_rooted(root_side, str(event.get("reason", "")) if str(event.get("reason", "")) != "" else "all")
+		elif et == E.EventType_Strike_StatusBadge and str(event.get("reason", "")) == "unrooted":
+			var unroot_side := 0 if int(event["event_player"]) == int(Enums.PlayerId.PlayerId_Player) else 1
+			_set_rooted(unroot_side, "")
 		elif et == E.EventType_Strike_StatusBadge or et == E.EventType_Strike_Stun_Immunity:
 			# Stun immunity, ignore armor, ignore guard: a badge for the rest of the strike.
 			var st_side := 0 if int(event["event_player"]) == int(Enums.PlayerId.PlayerId_Player) else 1
@@ -8434,6 +8580,9 @@ func on_game_event(event) -> float:
 			_hide_stun(0)
 			_hide_stun(1)
 			_end_strike_status()
+			for rs in range(2):
+				if _rooted[rs] == "in_range":
+					_set_rooted(rs, "") # (Cave In: for the strike only)
 		# Your own action gets its banner too, once you have confirmed it.
 		if _logged_new_action == 0 and strike_stage != null:
 			var mine := ""
@@ -9289,6 +9438,7 @@ const STATUS_BADGES := {
 	"grounded": "res://scenes/game/grounded_badge.gd",  # can't be pushed / pulled by the opponent
 	"barrier": "res://scenes/game/barrier_badge.gd",    # the opponent can't move past
 	"critical": "res://scenes/game/critical_badge.gd",  # Season 3: the strike is Critical
+	"rooted": "res://scenes/game/rooted_badge.gd",      # can't move (Halberdier, Wolf Trap, Cave In...)
 }
 var _status_badges : Array = [{}, {}] # per side: kind -> badge
 
@@ -9320,6 +9470,24 @@ func _hide_status(side : int, kind : String) -> void:
 		b.fade_out()
 	_badges[side].erase(b)
 	_place_advantage_badges()
+
+# ROOTED: a side that can't move, from the effect until it ends ("all": can't move at all;
+# "advance_close": can't Advance or Close, an arrow points that way; "in_range": can't move while
+# in the opponent's range, for the strike; "": not rooted).
+var _rooted : Array = ["", ""]
+
+func _set_rooted(side : int, mode : String) -> void:
+	if _rooted[side] == mode:
+		return
+	_rooted[side] = mode
+	if mode == "":
+		_hide_status(side, "rooted")
+		return
+	_show_status(side, "rooted")
+	var b = _status_badges[side].get("rooted")
+	if b != null and is_instance_valid(b):
+		# (Advance / Close is toward the other character: right for yours, left for theirs)
+		b.arrow_dir = (1 if side == 0 else -1) if mode == "advance_close" else 0
 
 # A status badge stays up while a strike effect or a boost in play gives it.
 var _strike_status : Array = [{}, {}]   # kinds gained during the current strike
@@ -10328,9 +10496,28 @@ func _topdeck_source_name() -> String:
 	var bn := str(lc.definition.get("boost", {}).get("display_name", ""))
 	return bn if bn != "" else str(lc.definition.get("display_name", ""))
 
+# The verb for a top-of-deck action ("Choose a card to discard").
+func _topdeck_verb(action : String) -> String:
+	match action:
+		"discard": return "discard"
+		"add_to_hand": return "draw"
+		"add_to_gauge": return "add to Gauge"
+		"add_to_sealed": return "seal"
+		"add_to_overdrive": return "add to Overdrive"
+		"boost": return "boost"
+		"strike": return "strike with"
+	return str(game.get_string_for_action_choice(action)).to_lower()
+
 func _topdeck_title() -> String:
 	var src := _topdeck_source_name()
 	var pre := (src + ": ") if src != "" else ""
+	# One thing to do with the chosen card, and no passing (Morathi's Exceed: discard one, then
+	# draw one): "Choose a card to discard".
+	var di = game.game_wrapper.get_decision_info()
+	if di != null and di.action is Array and di.action.size() == 1 and not di.can_pass:
+		if game.selected_cards.size() == 1:
+			return "%s %s?" % [str(game.get_string_for_action_choice(di.action[0])), str(game.selected_cards[0].card_attack_name)]
+		return "Choose a card to %s" % _topdeck_verb(str(di.action[0]))
 	if game.selected_cards.size() == 1:
 		var opts := _topdeck_options()
 		if opts.size() == 1:
@@ -10941,7 +11128,7 @@ func show_popout_preview(card_id : int, src_override = null) -> bool:
 	popout_preview_root.add_child(card)
 	card.initialize_simple(card_id, src.card_url_loaded_image, src.card_url_loaded_cardback, src.card_attack_name, src.card_boost_name)
 	if src.badge_text != "":
-		card.set_badge(src.badge_text, src.badge_color, src.badge_s6, src.badge_s3)
+		card.set_badge(src.badge_text, src.badge_color, src.badge_s6, src.badge_s3, src.badge_s1)
 	card.flip_card_to_front(src.card_front.visible)
 	card.change_state(CardBase.CardState.CardState_InPopout)
 	card.set_card_and_focus(CardBase.phone_focus_center, 0, CardBase.phone_focus_scale)
