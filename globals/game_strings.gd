@@ -1897,9 +1897,9 @@ func get_effect_type_text(effect, card_name_source : String = "", char_effect_pa
 		StrikeEffects.MinatoOutrunThePast:
 			effect_str += "Seal up to 4 cards from your discard or gauge; draw 1 for every 2 sealed"
 		# (Phone boost box: effects that had no text yet.)
-		"reading_normal":
+		StrikeEffects.ReadingNormal:
 			effect_str += "Name a Normal; if the opponent has it, they must strike with it"
-		"choose_cards_from_top_deck":
+		StrikeEffects.ChooseCardsFromTopDeck:
 			var look_n = effect.get('look_amount', 1)
 			var acts : Array = []
 			for a in effect.get('action_choices', []):
@@ -1914,72 +1914,72 @@ func get_effect_type_text(effect, card_name_source : String = "", char_effect_pa
 			if int(look_n) >= 20:
 				look_str = "Search your deck"
 			effect_str += "%s: %s%s" % [look_str, " or ".join(acts) if not acts.is_empty() else "choose one", where_rest]
-		"zero_vector":
+		StrikeEffects.ZeroVector:
 			effect_str += "Name a card: it is invalid for both players"
-		"seal_hand":
+		StrikeEffects.SealHand:
 			effect_str += "Seal your hand"
-		"opponent_discard_normals_or_reveal":
+		StrikeEffects.OpponentDiscardNormalsOrReveal:
 			effect_str += "Opponent discards %s Normals or reveals their hand" % str(effect.get('amount', 1))
-		"set_end_of_turn_boost_delay":
+		StrikeEffects.SetEndOfTurnBoostDelay:
 			effect_str += "(Its end of turn effect waits until your next turn)"
-		"discard_to":
+		StrikeEffects.DiscardTo:
 			if effect.get('for_other_player', false):
 				effect_str += "Opponent discards down to %s card(s) in hand" % str(effect.get('amount', 0))
 			else:
 				effect_str += "Discard down to %s card(s) in hand" % str(effect.get('amount', 0))
-		"generate_free_force_cc_only":
+		StrikeEffects.GenerateFreeForceCcOnly:
 			effect_str += "Change Cards: +%s Force" % str(effect.get('amount', 1))
-		"shuffle_deck":
+		StrikeEffects.ShuffleDeck:
 			effect_str += "Shuffle your deck"
-		"bottomdeck_from_hand":
+		StrikeEffects.BottomdeckFromHand:
 			var per_txt := ""
 			if effect.get('per_card_effect') != null:
 				per_txt = ". For each, %s" % get_effect_text(effect['per_card_effect'], false, true, true, card_name_source)
 			effect_str += "Put any number of cards from hand on the bottom of your deck%s" % per_txt
-		"discard_hand":
+		StrikeEffects.DiscardHand:
 			effect_str += "Discard your hand"
-		"remove_force_costs_reduced_passive":
+		StrikeEffects.RemoveForceCostsReducedPassive:
 			effect_str += "Force cost reduction ends"
-		"add_boost_to_gauge_on_move":
+		StrikeEffects.AddBoostToGaugeOnMove:
 			effect_str += "When you move, add this to your Gauge"
-		"add_recursive_choice_for_opponent":
+		StrikeEffects.AddRecursiveChoiceForOpponent:
 			effect_str += "Opponent may add cards from hand to Gauge, one at a time"
-		"enable_boost_from_gauge":
+		StrikeEffects.EnableBoostFromGauge:
 			effect_str += "You may boost from your Gauge"
-		"draw_or_discard_to":
+		StrikeEffects.DrawOrDiscardTo:
 			effect_str += "Draw or discard until you have %s cards in hand" % str(effect.get('amount', 0))
-		"sidestep_transparent_foe":
+		StrikeEffects.SidestepTransparentFoe:
 			effect_str += "Name a card: it will not hit this strike"
-		"shuffle_discard_in_place":
+		StrikeEffects.ShuffleDiscardInPlace:
 			effect_str += "Shuffle your discard pile"
-		"shuffle_into_deck_from_hand":
+		StrikeEffects.ShuffleIntoDeckFromHand:
 			var lo = effect.get('min_amount', 1)
 			var hi = effect.get('max_amount', lo)
 			var n_str := str(lo) if str(lo) == str(hi) else "%s-%s" % [str(lo), str(hi)]
 			effect_str += "Shuffle %s card(s) from hand into your deck" % n_str
-		"move_to_lightningrods":
+		StrikeEffects.MoveToLightningrods:
 			effect_str += "Move to a space with a Lightning Rod"
-		"return_all_copies_of_top_discard_to_hand":
+		StrikeEffects.ReturnAllCopiesOfTopDiscardToHand:
 			effect_str += "Return all copies of the top card of your discard pile to your hand"
-		"boost_applies_if_on_buddy":
+		StrikeEffects.BoostAppliesIfOnBuddy:
 			effect_str += "(Applies while on your buddy's space)"
-		"switch_spaces_with_buddy":
+		StrikeEffects.SwitchSpacesWithBuddy:
 			effect_str += "Switch spaces with %s" % str(effect.get('condition_detail', "your buddy"))
-		"strike_effect_after_opponent_sets":
+		StrikeEffects.StrikeEffectAfterOpponentSets:
 			effect_str += "Strike; after the opponent sets: %s" % get_effect_text(effect['after_set_effect'], false, true, true, card_name_source)
-		"strike_effect_after_setting":
+		StrikeEffects.StrikeEffectAfterSetting:
 			effect_str += "Strike; after setting: %s" % get_effect_text(effect['after_set_effect'], false, true, true, card_name_source)
-		"increase_gauge_spent_before_strike":
+		StrikeEffects.IncreaseGaugeSpentBeforeStrike:
 			effect_str += "Counts as 1 more Gauge spent before the strike"
-		"play_boost_with_cards_under":
+		StrikeEffects.PlayBoostWithCardsUnder:
 			effect_str += "Cards are placed under this boost"
-		"draw_cards_under_boost_and_remove":
+		StrikeEffects.DrawCardsUnderBoostAndRemove:
 			effect_str += "Add the cards under this boost to your hand"
-		"strike_from_gauge":
+		StrikeEffects.StrikeFromGauge:
 			effect_str += "Strike from your Gauge"
-		"draw_for_card_in_hand":
+		StrikeEffects.DrawForCardInHand:
 			effect_str += "Draw 1 for each card in hand, then discard that many"
-		"name_range":
+		StrikeEffects.NameRange:
 			effect_str += "Name a Range: the opponent discards a card with it, or reveals their hand"
 		_:
 			effect_str += "MISSING EFFECT"

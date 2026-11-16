@@ -194,6 +194,9 @@ func restore() -> void:
 		_active = null
 	CardBase.phone_mode = false
 	CardBase.phone_anim_pace = 1.0
+	if _instr_base_fs >= 0 and is_instance_valid(game) and is_instance_valid(game.action_menu):
+		game.action_menu.instructions_label.add_theme_font_size_override("normal_font_size", _instr_base_fs)
+		game.action_menu.instructions_label.add_theme_font_size_override("bold_font_size", _instr_base_fs)
 	if OS.has_feature("mobile"):
 		DisplayServer.screen_set_orientation(_saved_orientation)
 	var win := get_window()
@@ -2965,6 +2968,47 @@ const BONUS_FONT_MAX := 21
 const BONUS_FONT_MIN := 14 # below this, text in the bonus box gets hard to read on a phone
 const BONUS_LINE_H := 28.0 # every line of the bonus box is this tall, whatever its font size
 
+# The action menu's instructions keep the game's own wording (and line breaks); on the phone the
+# font shrinks instead until every line fits the menu's width and the whole prompt fits
+# INSTR_MAX_BASE_LINES lines at the normal size.
+const INSTR_FONT_MIN := 12
+const INSTR_MAX_BASE_LINES := 3
+var _instr_base_fs : int = -1
+var _instr_fit_key : String = ""
+var _instr_tag_re : RegEx = null
+
+func _fit_action_menu_instructions(menu_w : float) -> void:
+	var lab : RichTextLabel = game.action_menu.instructions_label
+	if _instr_base_fs < 0:
+		_instr_base_fs = lab.get_theme_font_size("normal_font_size")
+	var hbox : Control = lab.get_parent()
+	# Room for the label: the menu's width less the instruction row's other parts and the
+	# menu's own margins / panel borders.
+	var avail : float = menu_w - (hbox.get_combined_minimum_size().x - lab.get_combined_minimum_size().x) - 24.0
+	var key := "%s|%d" % [lab.text, int(avail)]
+	if key == _instr_fit_key:
+		return
+	_instr_fit_key = key
+	if _instr_tag_re == null:
+		_instr_tag_re = RegEx.new()
+		_instr_tag_re.compile("\\[[^\\]]*\\]")
+	var lines : PackedStringArray = _instr_tag_re.sub(lab.text, "", true).split("\n")
+	var f : Font = lab.get_theme_font("normal_font")
+	var max_h : float = f.get_height(_instr_base_fs) * INSTR_MAX_BASE_LINES
+	var fs := _instr_base_fs
+	while fs > INSTR_FONT_MIN and not _instr_fits(f, lines, fs, avail, max_h):
+		fs -= 1
+	lab.add_theme_font_size_override("normal_font_size", fs)
+	lab.add_theme_font_size_override("bold_font_size", fs)
+
+func _instr_fits(f : Font, lines : PackedStringArray, fs : int, avail : float, max_h : float) -> bool:
+	if f.get_height(fs) * lines.size() > max_h:
+		return false
+	for ln in lines:
+		if f.get_string_size(ln, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > avail:
+			return false
+	return true
+
 func _place_action_menu() -> void:
 	var amc : Control = game.action_menu_container
 	var s := 0.72
@@ -2989,6 +3033,7 @@ func _place_action_menu() -> void:
 			amc.size.x = 0.0 # shrinks to the minimum size (the eye button)
 			mw = amc.get_combined_minimum_size().x * s
 		else:
+			_fit_action_menu_instructions(mw / s)
 			amc.size.x = mw / s
 		amc.position.x = (W - mw) / 2.0
 		var mh := amc.get_combined_minimum_size().y * s
@@ -3000,6 +3045,7 @@ func _place_action_menu() -> void:
 	s = 0.72 * 1.25
 	amc.scale = Vector2(s, s)
 	var w := W - 24.0
+	_fit_action_menu_instructions(w / s)
 	amc.size.x = w / s
 	amc.position.x = (W - w) / 2.0
 	var h := amc.get_combined_minimum_size().y * s
@@ -6973,7 +7019,7 @@ func _build_reference_list(popout : Control) -> void:
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var their_ref : bool = t == T.CardPopoutType_ReferenceOpponent and popout.toggle_container.visible
 	if their_ref:
-		# Their deck reference: the "pre-reshuffle" toggle sits at the top right, next to the
+		# Their deck reference: the "Show cards before reshuffle" toggle sits at the top right, next to the
 		# title (the stock one at the bottom is hidden).
 		popout.toggle_container.visible = false
 		var head := HBoxContainer.new()
@@ -6988,11 +7034,15 @@ func _build_reference_list(popout : Control) -> void:
 		var tb := Button.new()
 		tb.focus_mode = Control.FOCUS_NONE
 		var ttxt := str(stock.text)
-		if ttxt == "Show cards before reshuffle":
-			ttxt = "Show cards pre-reshuffle"
 		tb.text = ttxt
 		tb.disabled = stock.disabled
-		tb.add_theme_font_size_override("font_size", 16)
+		# Same text as the stock button: shrink the font until it fits beside the title.
+		var tfont : Font = tb.get_theme_font("font")
+		var room : float = title_w * 0.55 - 20.0 # (the rest is the title's; 20 = the button's padding)
+		var tfs := 16
+		while tfs > 10 and tfont.get_string_size(ttxt, HORIZONTAL_ALIGNMENT_LEFT, -1, tfs).x > room:
+			tfs -= 1
+		tb.add_theme_font_size_override("font_size", tfs)
 		tb.add_theme_stylebox_override("normal", _style(Color(0.08, 0.1, 0.18, 0.9), Color(1, 1, 1, 0.7), 2, 8))
 		tb.add_theme_stylebox_override("hover", _style(Color(0.14, 0.16, 0.26, 0.95), Color(1, 1, 1, 0.9), 2, 8))
 		tb.add_theme_stylebox_override("pressed", _style(Color(0.04, 0.05, 0.1, 0.95), Color(1, 1, 1, 0.9), 2, 8))

@@ -17044,7 +17044,8 @@
 						"card_name": "Ultimate Fortissimo"
 					},
 					"min_gauge": 2,
-					"gauge_max": 2
+					"gauge_max": 2,
+					"can_pass": true
 				}
 			]
 		}

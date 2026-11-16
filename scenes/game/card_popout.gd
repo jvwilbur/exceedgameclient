@@ -75,7 +75,7 @@ func set_instructions(instruction_info):
 func set_reference_toggle(toggle_text, toggle_visible):
 	toggle_container.visible = toggle_visible
 	if toggle_text == "":
-		toggle_button.text = "Show cards pre-reshuffle"
+		toggle_button.text = "Show cards before reshuffle"
 		toggle_button.disabled = true
 	else:
 		toggle_button.text = toggle_text

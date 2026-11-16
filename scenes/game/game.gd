@@ -3156,9 +3156,9 @@ func _on_add_to_gauge(event):
 	var is_player = player == Enums.PlayerId.PlayerId_Player
 	if card.get_parent() == $AllCards/PlayerDeck or card.get_parent() == $AllCards/OpponentDeck:
 		card.set_card_and_focus(get_deck_button_position(is_player), null, null)
-	# A strike card going to the gauge at the end of a strike: no pause after it, so it
-	# leaves at the same time as the other strike card (discards have no pause either).
-	var from_strike : bool = card.get_parent() == $AllCards/Striking
+	# Phone layout: a strike card going to the gauge at the end of a strike gets no pause after
+	# it, so it leaves at the same time as the other strike card (discards have no pause either).
+	var from_strike : bool = phone_layout != null and card.get_parent() == $AllCards/Striking
 	card.discard_to(pos, CardBase.CardState.CardState_InGauge)
 	reparent_to_zone(card, gauge_card_loc)
 	layout_player_hand(is_player)
@@ -3726,7 +3726,7 @@ func update_gauge_selection_message():
 		if force_for_armor_ignore_armor:
 			damage_after_armor = force_for_armor_incoming_damage
 			ignore_armor_str = "Armor Ignored! "
-		set_instructions("Spend Gauge for +%s Armor each.\n%s %sYou will take %s damage." % [force_for_armor_amount, force_generated_str, ignore_armor_str, damage_after_armor])
+		set_instructions("Spend Gauge for +%s Armor each.\n%s\n%sYou will take %s damage." % [force_for_armor_amount, force_generated_str, ignore_armor_str, damage_after_armor])
 	else:
 		var gauge_from_life = get_gauge_from_spent_life()
 		var num_remaining = select_card_require_min - get_gauge_generated()
@@ -3874,7 +3874,7 @@ func update_force_generation_message():
 			if force_for_armor_ignore_armor:
 				damage_after_armor = force_for_armor_incoming_damage
 				ignore_armor_str = "Armor Ignored! "
-			set_instructions("Select cards to generate force for +%s Armor each.\n%s %sYou will take %s damage." % [force_for_armor_amount, force_generated_str, ignore_armor_str, damage_after_armor])
+			set_instructions("Select cards to generate force for +%s Armor each.\n%s\n%sYou will take %s damage." % [force_for_armor_amount, force_generated_str, ignore_armor_str, damage_after_armor])
 		UISubState.UISubState_SelectCards_StrikeForce:
 			set_instructions("Select cards to generate %s force for this strike.\n%s" % [select_card_require_force, force_generated_str])
 		UISubState.UISubState_SelectCards_ForceForEffect:
@@ -4657,9 +4657,10 @@ func _on_force_for_armor(event):
 	force_for_armor_incoming_damage = event['number']
 	force_for_armor_ignore_armor = event['extra_info']
 	force_for_armor_amount = game_wrapper.get_decision_info().amount
-	# Paying to block (either player): the blocker's strike card is the one in focus first (its
-	# backlight moves over to it before the payment is chosen / comes through).
-	_backlight_player_strike_card(player)
+	# Phone layout, paying to block (either player): the blocker's strike card is the one in
+	# focus first (its backlight moves over to it before the payment is chosen / comes through).
+	if phone_layout != null:
+		_backlight_player_strike_card(player)
 	if player == Enums.PlayerId.PlayerId_Player and not observer_mode:
 		if use_gauge_instead:
 			begin_gauge_selection(-1, false, UISubState.UISubState_SelectCards_GaugeForArmor)
@@ -4951,8 +4952,8 @@ func _handle_events(events):
 		_log_event(event)
 		# (The phone layout peeks at what follows, e.g. to tell an invalid strike card's discard
 		# from the end of the strike.)
-		events_ahead = events.slice(event_index + 1)
 		if phone_layout != null:
+			events_ahead = events.slice(event_index + 1)
 			# The opponent's action is announced with a banner first: hold this event (and
 			# the rest) back until it has played.
 			var banner_delay : float = phone_layout.on_game_event(event)
@@ -7893,7 +7894,7 @@ func show_popout(popout_type : CardPopoutType, popout_title : String, card_node,
 			if reference_popout_toggle:
 				toggle_text = "Show current cards"
 			else:
-				toggle_text = "Show cards pre-reshuffle"
+				toggle_text = "Show cards before reshuffle"
 	card_popout.set_reference_toggle(toggle_text, toggle_visible)
 
 	update_popout_instructions()
